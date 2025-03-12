@@ -7,22 +7,25 @@
 #include <iostream>
 using namespace glm;
 
+// functions
 GLFWwindow* StartGLU();
-struct Ray{
-    vec3 direction;
-    vec3 origin;
-    Ray(vec3 direction, vec3 origin) : direction(direction), origin(origin) {}
-};
-struct Object{
-    float radius;
-    vec3 centre;
-    Object(float radius, vec3 centre) : centre(centre), radius(radius){}
-};
+GLuint CreateShaderProgram();
+GLuint setupQuad();
 
 int main() {
+    // setup
     GLFWwindow* window = StartGLU();
+    GLuint shaderProgram = CreateShaderProgram(); // compile shader program
+    GLuint quadVAO = setupQuad(); // create quad background
 
     while(!glfwWindowShouldClose(window)){
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(shaderProgram);
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -30,14 +33,16 @@ int main() {
     glfwTerminate();
 }
 
+// function declarations
 GLFWwindow* StartGLU() {
     if (!glfwInit()) {
-        std::cout << "Failed to initialize GLFW, panic" << std::endl;
+        std::cerr << "Failed to initialize GLFW" << std::endl;
         return nullptr;
     }
-    GLFWwindow* window = glfwCreateWindow(800, 600, "RAY_TRACING", NULL, NULL);
+
+    GLFWwindow* window = glfwCreateWindow(800, 600, "RAY_TRACING", nullptr, nullptr);
     if (!window) {
-        std::cerr << "Failed to create GLFW window, PANIC PANIC PANIC!" << std::endl;
+        std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return nullptr;
     }
@@ -50,15 +55,67 @@ GLFWwindow* StartGLU() {
         return nullptr;
     }
 
-    glEnable(GL_DEPTH_TEST);
     glViewport(0, 0, 800, 600);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Standard blending for transparency
-
     return window;
 }
+GLuint CreateShaderProgram(){
 
+    const char* vertexShaderSource = R"(
+        #version 330 core
+        layout (location = 0) in vec2 aPos;
+        void main() {
+            gl_Position = vec4(aPos, 0.0, 1.0);
+        }
+    )";
 
+    const char* fragmentShaderSource = R"(
+        #version 330 core
+        out vec4 FragColor;
+        void main() {
+            FragColor = vec4(1.0, 0.0, 0.0, 1.0); // 🔴 Full Red
+        }
+    )";
 
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
+    glCompileShader(vertexShader);
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
+    glCompileShader(fragmentShader);
+
+    GLuint shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    return shaderProgram;
+}
+GLuint setupQuad() {
+    float quadVertices[] = {
+        -1.0f,  1.0f,  // top left
+        -1.0f, -1.0f,  // bottom left
+         1.0f, -1.0f,  // bottom right
+        -1.0f,  1.0f,  // top right
+         1.0f, -1.0f,  // bottom right
+         1.0f,  1.0f   // top right
+    };
+
+    GLuint VAO, VBO;
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+    
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    return VAO;
+}
 
 
