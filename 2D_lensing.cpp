@@ -19,7 +19,7 @@ float solarMass = 1.989 * pow(10, 30); // kg
 float M = solarMass * 4297000.0f; // kg
 float c = 299792458.0f; // m/s
 
-vec2 blackHolePos = vec2(400.0f, 300.0f);
+vec2 blackHolePos = vec2(0.0f, 0.0f);
 
 // --- CONVERSIONS --- //
 float MtoPx = c / 1000.0f; // pixels per km - lights travels 1kpx/s
@@ -55,8 +55,8 @@ struct Ray {
         trail.push_back({x, y});
     }
     
-    void step(double dλ, double rs) {
-        rk4Step(*this, dλ, rs);  // evolve physics (r,φ,dr,dφ)
+    void step(double dt, double rs) {
+        rk4Step(*this, dt, rs);  // evolve physics (r,φ,dr,dφ)
 
         // Convert back to screen space
         x = blackHolePos.x + r * cos(phi) * PxToM;
@@ -84,10 +84,71 @@ struct Engine {
 
     std::vector<Ray>* raysPtr = nullptr;
 
+    // Navigation state
+    float offsetX = 0.0f, offsetY = 0.0f;
+    float zoom = 1.0f;
+    bool middleMousePressed = false;
+    double lastMouseX = 0.0, lastMouseY = 0;
+
     Engine() {
         window = StartGLFW();
         glfwSetWindowUserPointer(this->window, this);
         glfwSetMouseButtonCallback(this->window, this->mouseButtonCallback);
+        glfwSetScrollCallback(this->window, this->scrollCallback);
+        glfwSetCursorPosCallback(this->window, this->cursorPosCallback);
+    }
+
+    void applyView() {
+        float left   = 0.0f - offsetX;
+        float right  = WIDTH / zoom - offsetX;
+        float bottom = 0.0f - offsetY;
+        float top    = HEIGHT / zoom - offsetY;
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrtho(left, right, bottom, top, -1.0, 1.0);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+    }
+
+    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+            if (action == GLFW_PRESS) {
+                eng->middleMousePressed = true;
+                glfwGetCursorPos(window, &eng->lastMouseX, &eng->lastMouseY);
+            } else if (action == GLFW_RELEASE) {
+                eng->middleMousePressed = false;
+            }
+        }
+        // Existing left mouse logic (for rays)
+        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+            if (eng->raysPtr) {
+                eng->initRays(*eng->raysPtr);
+            }
+        }
+    }
+
+    static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
+        if (eng->middleMousePressed) {
+            double dx = xpos - eng->lastMouseX;
+            double dy = ypos - eng->lastMouseY;
+            eng->offsetX += dx / eng->zoom;
+            eng->offsetY -= dy / eng->zoom; // Y is usually inverted in OpenGL
+            eng->lastMouseX = xpos;
+            eng->lastMouseY = ypos;
+        }
+    }
+
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
+        float zoomFactor = 1.1f;
+        if (yoffset > 0)
+            eng->zoom *= zoomFactor;
+        else if (yoffset < 0)
+            eng->zoom /= zoomFactor;
+        if (eng->zoom < 0.1f) eng->zoom = 0.1f;
+        if (eng->zoom > 10.0f) eng->zoom = 10.0f;
     }
 
     GLFWwindow* StartGLFW() {
@@ -172,29 +233,21 @@ struct Engine {
         glDisable(GL_BLEND);
     }
     void initRays (vector<Ray>& rays) {
-        for (int i = -10; i < 34; ++i) {
-            float y = i * 25;
-            rays.push_back({ vec2(800.0f, y), vec2(-c, 0.0f) });
+        for (int i = -2000; i < 2000; i+=500) {
+            float y = i;
+            rays.push_back({ vec2(2000.0f, y), vec2(-c, 0.0f) });
         }
-        for (int i = -10; i < 42; ++i) {
-            float x = i * 25;
-            rays.push_back({ vec2(x, 0.0f), vec2(0.0f, c) });
+        for (int i = -2000; i < 2000; i+=500) {
+            float x = i;
+            rays.push_back({ vec2(x, -2000.0f), vec2(0.0f, c) });
         }
-        for (int i = -10; i < 34; ++i) {
-            float y = i * 25;
-            rays.push_back({ vec2(0.0f, y), vec2(c, 0.0f) });
+        for (int i = -2000; i < 2000; i+=500) {
+            float y = i;
+            rays.push_back({ vec2(-2000.0f, y), vec2(c, 0.0f) });
         }
-        for (int i = -10; i < 42; ++i) {
-            float x = i * 25;
-            rays.push_back({ vec2(x, 600.0f), vec2(0.0f, -c) });
-        }
-    }
-    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-            Engine* engine = static_cast<Engine*>(glfwGetWindowUserPointer(window));
-            if (engine->raysPtr) {
-                engine->initRays(*engine->raysPtr);
-            }
+        for (int i = -2000; i < 2000; i+=500) {
+            float x = i;
+            rays.push_back({ vec2(x, 2000.0f), vec2(0.0f, -c) });
         }
     }
 };
@@ -209,7 +262,7 @@ void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
 
     rhs[0] = dr;
     rhs[1] = dphi;
-    rhs[2] = -(rs / (2.0 * r * r)) * ( (dr * dr) / f + f * r * r * dphi * dphi );
+    rhs[2] = -(rs / (2.0 * r*r)) * ( (dr*dr) / f+f * r*r * dphi*dphi );
     rhs[3] = -2.0 * dr * dphi / r;
 }
 void addState(const double a[4], const double b[4], double factor, double out[4]) {
@@ -255,7 +308,9 @@ int main() {
     physics phys;
     vector<Ray> rays;
 
-    engine.initRays(rays);
+    //engine.initRays(rays);
+    rays.push_back({ vec2(1800.0f, 1200.0f), vec2(-c, 0.0f) });
+    rays.push_back({ vec2(1200.0f, 1000.0f), vec2(-c, 0.0f) });
 
     // point engine to rays vector
     engine.raysPtr = &rays;
@@ -264,6 +319,7 @@ int main() {
     // --- LOOP --- //
     while (!glfwWindowShouldClose(engine.window)) {
         glClear(GL_COLOR_BUFFER_BIT);
+        engine.applyView();
         glLoadIdentity();
 
         // Update rays
@@ -271,7 +327,7 @@ int main() {
         for (auto& ray : rays) {
 
             // - Check Event Horizon - //
-            if (length(vec2(ray.x, ray.y) - blackHolePos) < phys.rs_m()) {ray.trail.empty(); continue;};
+            if (length(vec2(ray.x, ray.y) - blackHolePos) < phys.rs_m()) {continue;};
 
             ray.step(dt, phys.rs_m()); // evolve physics (r,φ,dr,dφ)
 
