@@ -77,7 +77,6 @@ struct physics {
         return r_s * meterToPx; // convert to pixels
     }
 };
-
 struct Engine {
     GLFWwindow* window;
     int WIDTH = 800;
@@ -164,7 +163,7 @@ struct Engine {
             for (size_t i = 0; i < N; ++i) {
                 // older points (i=0) get alpha≈0, newer get alpha≈1
                 float alpha = float(i) / float(N - 1);
-                glColor4f(1.0f, 1.0f, 1.0f, std::max(alpha, 1.05f));
+                glColor4f(1.0f, 1.0f, 1.0f, std::max(alpha, 0.05f));
                 glVertex2f(ray.trail[i].x, ray.trail[i].y);
             }
             glEnd();
@@ -172,18 +171,34 @@ struct Engine {
     
         glDisable(GL_BLEND);
     }
+    void initRays (vector<Ray>& rays) {
+        for (int i = -10; i < 34; ++i) {
+            float y = i * 25;
+            rays.push_back({ vec2(800.0f, y), vec2(-c, 0.0f) });
+        }
+        for (int i = -10; i < 42; ++i) {
+            float x = i * 25;
+            rays.push_back({ vec2(x, 0.0f), vec2(0.0f, c) });
+        }
+        for (int i = -10; i < 34; ++i) {
+            float y = i * 25;
+            rays.push_back({ vec2(0.0f, y), vec2(c, 0.0f) });
+        }
+        for (int i = -10; i < 42; ++i) {
+            float x = i * 25;
+            rays.push_back({ vec2(x, 600.0f), vec2(0.0f, -c) });
+        }
+    }
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             Engine* engine = static_cast<Engine*>(glfwGetWindowUserPointer(window));
             if (engine->raysPtr) {
-                for (int i = 0; i < 100; ++i) {
-                    float y = 100 + i * 4;
-                    engine->raysPtr->push_back({ vec2(800.0f, y), vec2(-c / 100.0f, 0.0f) });
-                }
+                engine->initRays(*engine->raysPtr);
             }
         }
     }
 };
+
 
 void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
     double r    = ray.r;
@@ -238,14 +253,9 @@ void rk4Step(Ray& ray, double dλ, double rs) {
 int main() {
     Engine engine;
     physics phys;
-    std::vector<Ray> rays;
+    vector<Ray> rays;
 
-    // Init rays
-    for (int i = 0; i < 150; ++i) {
-        float y = 50 + i * 4;
-        rays.push_back({ vec2(800.0f, y), vec2(-c / 100.0f, 0.0f) });
-    }
-    //rays.push_back({ vec2(800.0f, 300.0f), vec2(-c, 0.0f) });
+    engine.initRays(rays);
 
     // point engine to rays vector
     engine.raysPtr = &rays;
@@ -257,11 +267,11 @@ int main() {
         glLoadIdentity();
 
         // Update rays
-        float dt = 0.1f;
+        float dt = 0.001f;
         for (auto& ray : rays) {
 
             // - Check Event Horizon - //
-            if (length(vec2(ray.x, ray.y) - blackHolePos) < phys.rs_m()) continue;
+            if (length(vec2(ray.x, ray.y) - blackHolePos) < phys.rs_m()) {ray.trail.empty(); continue;};
 
             ray.step(dt, phys.rs_m()); // evolve physics (r,φ,dr,dφ)
 
