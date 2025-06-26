@@ -13,76 +13,19 @@
 using namespace glm;
 using namespace std;
 
-// --- VARS --- //
-float G = 6.67430 * pow(10, -11);
-float solarMass = 1.989 * pow(10, 30); // kg
-float M = solarMass * 4297000.0f; // kg
-float c = 299792458.0f; // m/s
-
-vec2 blackHolePos = vec2(0.0f, 0.0f);
-
-// --- CONVERSIONS --- //
-float MtoPx = c / 1000.0f; // pixels per km - lights travels 1kpx/s
-float PxToM = 1.0f / MtoPx; // pixels to meters
+double c = 299792458.0;
+double G = 6.67430e-11;
 
 struct Ray;
 void rk4Step(Ray& ray, double dλ, double rs);
 
-// --- STRUCTS --- //
-struct Ray {
-    // -- cartesian coords -- //
-    double x;   double y;
-    // -- polar coords -- //
-    double r;   double phi;
-    double dr;  double dphi;
-    std::vector<vec2> trail;  // ← store past positions
-
-    Ray(vec2 pos, vec2 vel) : x(pos[0]) {
-        // step 1) store pos & dist : 
-        x = pos.x; y = pos.y;
-        double dx_m = (x - blackHolePos.x) * MtoPx;
-        double dy_m = (y - blackHolePos.y) * MtoPx;
-
-        // step 2) get polar coords (r, phi) :
-        r = sqrt(dx_m * dx_m + dy_m * dy_m); // m
-        phi = atan2(dy_m, dx_m); // radians
-
-        // step 3) seed velocities :
-        dr = vel.x * cos(phi) + vel.y * sin(phi); // m/s
-        dphi  = ( -vel.x * sin(phi) + vel.y * cos(phi) ) / r;
-
-        // step 4) start trail : 
-        trail.push_back({x, y});
-    }
-    
-    void step(double dt, double rs) {
-        rk4Step(*this, dt, rs);  // evolve physics (r,φ,dr,dφ)
-
-        // Convert back to screen space
-        x = blackHolePos.x + r * cos(phi) * PxToM;
-        y = blackHolePos.y + r * sin(phi) * PxToM;
-
-        trail.push_back({x, y});
-    }
-};
-struct physics {
-    float r_s = 2 * G * M / (c * c); // m
-    float pxWidth = 15.0f;           // width of black hole in pixels
-    
-     // Schwarzschild radius
-    float meterToPx = pxWidth / r_s;    // 1 meter to pixels
-    float pxToMeter = r_s / pxWidth;    // pixels to meters
-
-    float rs_m() {
-        return r_s * meterToPx; // convert to pixels
-    }
-};
+// --- Structs --- //
 struct Engine {
     GLFWwindow* window;
     int WIDTH = 800;
     int HEIGHT = 600;
-
-    std::vector<Ray>* raysPtr = nullptr;
+    float width = 100000000000.0f; // Width of the viewport in meters
+    float height = 75000000000.0f; // Height of the viewport in meters
 
     // Navigation state
     float offsetX = 0.0f, offsetY = 0.0f;
@@ -91,119 +34,90 @@ struct Engine {
     double lastMouseX = 0.0, lastMouseY = 0;
 
     Engine() {
-        window = StartGLFW();
-        glfwSetWindowUserPointer(this->window, this);
-        glfwSetMouseButtonCallback(this->window, this->mouseButtonCallback);
-        glfwSetScrollCallback(this->window, this->scrollCallback);
-        glfwSetCursorPosCallback(this->window, this->cursorPosCallback);
+        if (!glfwInit()) {
+            cerr << "Failed to initialize GLFW" << endl;
+            exit(EXIT_FAILURE);
+        }
+        window = glfwCreateWindow(WIDTH, HEIGHT, "Black Hole Simulation", NULL, NULL);
+        if (!window) {
+            cerr << "Failed to create GLFW window" << endl;
+            glfwTerminate();
+            exit(EXIT_FAILURE);
+        }
+        glfwMakeContextCurrent(window);
+        glewExperimental = GL_TRUE;
+        if (glewInit() != GLEW_OK) {
+            cerr << "Failed to initialize GLEW" << endl;
+            glfwDestroyWindow(window);
+            glfwTerminate();
+            exit(EXIT_FAILURE);
+        }
+        glViewport(0, 0, WIDTH, HEIGHT);;
     }
 
-    void applyView() {
-        float left   = 0.0f - offsetX;
-        float right  = WIDTH / zoom - offsetX;
-        float bottom = 0.0f - offsetY;
-        float top    = HEIGHT / zoom - offsetY;
+    void run() {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
+        double left   = -width + offsetX;
+        double right  =  width + offsetX;
+        double bottom = -height + offsetY;
+        double top    =  height + offsetY;
         glOrtho(left, right, bottom, top, -1.0, 1.0);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
     }
+};
+Engine engine;
+struct BlackHole {
+    vec3 position;
+    double mass;
+    double radius;
+    double r_s;
 
-    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-            if (action == GLFW_PRESS) {
-                eng->middleMousePressed = true;
-                glfwGetCursorPos(window, &eng->lastMouseX, &eng->lastMouseY);
-            } else if (action == GLFW_RELEASE) {
-                eng->middleMousePressed = false;
-            }
-        }
-        // Existing left mouse logic (for rays)
-        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-            if (eng->raysPtr) {
-                eng->initRays(*eng->raysPtr);
-            }
-        }
-    }
-
-    static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
-        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
-        if (eng->middleMousePressed) {
-            double dx = xpos - eng->lastMouseX;
-            double dy = ypos - eng->lastMouseY;
-            eng->offsetX += dx / eng->zoom;
-            eng->offsetY -= dy / eng->zoom; // Y is usually inverted in OpenGL
-            eng->lastMouseX = xpos;
-            eng->lastMouseY = ypos;
-        }
-    }
-
-    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-        Engine* eng = static_cast<Engine*>(glfwGetWindowUserPointer(window));
-        float zoomFactor = 1.1f;
-        if (yoffset > 0)
-            eng->zoom *= zoomFactor;
-        else if (yoffset < 0)
-            eng->zoom /= zoomFactor;
-        if (eng->zoom < 0.1f) eng->zoom = 0.1f;
-        if (eng->zoom > 10.0f) eng->zoom = 10.0f;
-    }
-
-    GLFWwindow* StartGLFW() {
-        if (!glfwInit()) {
-            std::cerr << "glfw failed init, PANIC PANIC!" << std::endl;
-            return nullptr;
-        }
-    
-        GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "ray tracer", NULL, NULL);
-        glfwMakeContextCurrent(window);
-    
-        glewExperimental = GL_TRUE;
-        if (glewInit() != GLEW_OK) {
-            std::cerr << "Failed to initialize GLEW." << std::endl;
-            glfwTerminate();
-            return nullptr;
-        }
-    
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glViewport(0, 0, WIDTH, HEIGHT);
-    
-        // ←––– ADD THIS: set up a 0…WIDTH, 0…HEIGHT orthographic projection
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        glOrtho(0.0, WIDTH,    // left, right
-                0.0, HEIGHT,   // bottom, top
-               -1.0, 1.0);     // near, far
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-    
-        return window;
-    }
-    
-    void renderScreen(float r, std::vector<Ray>& rays) {
-        this->draw(rays);
-        this->drawCircle(blackHolePos.x, blackHolePos.y, r, 100);
-        glfwSwapBuffers(window);
-        glfwPollEvents();              
-    }
-    void drawCircle(float cx, float cy, float r, int segments) {
-        glColor3f(1.0f, 0.0f, 0.0f);
+    BlackHole(vec3 pos, float m) : position(pos), mass(m) {r_s = 2.0 * G * mass / (c*c);}
+    void draw() {
         glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(cx, cy); // center
-        for (int i = 0; i <= segments; ++i) {
-            float angle = 2.0f * M_PI * i / segments;
-            float x = r * cos(angle);
-            float y = r * sin(angle);
-            glVertex2f(cx + x, cy + y);
+        glColor3f(1.0f, 0.0f, 0.0f);               // Red color for the black hole
+        glVertex2f(0.0f, 0.0f);                    // Center
+        for(int i = 0; i <= 100; i++) {
+            float angle = 2.0f * M_PI * i / 100;
+            float x = r_s * cos(angle); // Radius of 0.1
+            float y = r_s * sin(angle);
+            glVertex2f(x, y);
         }
         glEnd();
+    }
+};
+BlackHole SagA(vec3(0.0f, 0.0f, 0.0f), 8.54e36); // Sagittarius A black hole
+struct Ray{
+    // -- cartesian coords -- //
+    double x;   double y;
+    // -- polar coords -- //
+    double r;   double phi;
+    double dr;  double dphi;
+    vector<vec2> trail; // trail of points
+    double E, L;             // conserved quantities
+
+    Ray(vec2 pos, vec2 dir) : x(pos.x), y(pos.y), r(sqrt(pos.x * pos.x + pos.y * pos.y)), phi(atan2(pos.y, pos.x)), dr(dir.x), dphi(dir.y) {
+        // step 1) get polar coords (r, phi) :
+        this->r = sqrt(x*x + y*y);
+        this->phi = atan2(y, x);
+        // step 2) seed velocities :
+        dr = dir.x * cos(phi) + dir.y * sin(phi); // m/s
+        dphi  = ( -dir.x * sin(phi) + dir.y * cos(phi) ) / r;
+        // step 3) store conserved quantities
+        L = r*r * dphi;
+        double f = 1.0 - SagA.r_s/r;  
+        double dt_dλ = sqrt( (dr*dr)/(f*f) + (r*r*dphi*dphi)/f );
+        E = f * dt_dλ;
+        // step 4) start trail :
+        trail.push_back({x, y});
     }
     void draw(const std::vector<Ray>& rays) {
         // draw current ray positions as points
         glPointSize(2.0f);
-        glColor3f(0.0f, 0.0f, 0.0f);
+        glColor3f(1.0f, 0.0f, 0.0f);
         glBegin(GL_POINTS);
           for (const auto& ray : rays) {
               glVertex2f(ray.x, ray.y);
@@ -232,37 +146,42 @@ struct Engine {
     
         glDisable(GL_BLEND);
     }
-    void initRays (vector<Ray>& rays) {
-        for (int i = -2000; i < 2000; i+=500) {
-            float y = i;
-            rays.push_back({ vec2(2000.0f, y), vec2(-c, 0.0f) });
-        }
-        for (int i = -2000; i < 2000; i+=500) {
-            float x = i;
-            rays.push_back({ vec2(x, -2000.0f), vec2(0.0f, c) });
-        }
-        for (int i = -2000; i < 2000; i+=500) {
-            float y = i;
-            rays.push_back({ vec2(-2000.0f, y), vec2(c, 0.0f) });
-        }
-        for (int i = -2000; i < 2000; i+=500) {
-            float x = i;
-            rays.push_back({ vec2(x, 2000.0f), vec2(0.0f, -c) });
-        }
+    void step(double dλ, double rs) {
+        // 1) integrate (r,φ,dr,dφ)
+        if(r <= rs) return; // stop if inside the event horizon
+        rk4Step(*this, dλ, rs);
+
+        // 2) convert back to cartesian x,y
+        x = r * cos(phi);
+        y = r * sin(phi);
+
+        // 3) record the trail
+        trail.push_back({ float(x), float(y) });
     }
 };
-
+vector<Ray> rays;
 
 void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
     double r    = ray.r;
     double dr   = ray.dr;
     double dphi = ray.dphi;
+    double E    = ray.E;
 
-    double f = 1.0 - rs / r;
+    double f = 1.0 - rs/r;
 
+    // dr/dλ = dr
     rhs[0] = dr;
+    // dφ/dλ = dphi
     rhs[1] = dphi;
-    rhs[2] = -(rs / (2.0 * r*r)) * ( (dr*dr) / f+f * r*r * dphi*dphi );
+
+    // d²r/dλ² from Schwarzschild null geodesic:
+    double dt_dλ = E / f;
+    rhs[2] = 
+        - (rs/(2*r*r)) * f * (dt_dλ*dt_dλ)
+        + (rs/(2*r*r*f)) * (dr*dr)
+        + (r - rs) * (dphi*dphi);
+
+    // d²φ/dλ² = -2*(dr * dphi) / r
     rhs[3] = -2.0 * dr * dphi / r;
 }
 void addState(const double a[4], const double b[4], double factor, double out[4]) {
@@ -273,69 +192,39 @@ void rk4Step(Ray& ray, double dλ, double rs) {
     double y0[4] = { ray.r, ray.phi, ray.dr, ray.dphi };
     double k1[4], k2[4], k3[4], k4[4], temp[4];
 
-    // k1
     geodesicRHS(ray, k1, rs);
-
-    // k2
     addState(y0, k1, dλ/2.0, temp);
-    Ray r2 = ray;
-    r2.r = temp[0]; r2.phi = temp[1]; r2.dr = temp[2]; r2.dphi = temp[3];
+    Ray r2 = ray; r2.r=temp[0]; r2.phi=temp[1]; r2.dr=temp[2]; r2.dphi=temp[3];
     geodesicRHS(r2, k2, rs);
 
-    // k3
     addState(y0, k2, dλ/2.0, temp);
-    Ray r3 = ray;
-    r3.r = temp[0]; r3.phi = temp[1]; r3.dr = temp[2]; r3.dphi = temp[3];
+    Ray r3 = ray; r3.r=temp[0]; r3.phi=temp[1]; r3.dr=temp[2]; r3.dphi=temp[3];
     geodesicRHS(r3, k3, rs);
 
-    // k4
     addState(y0, k3, dλ, temp);
-    Ray r4 = ray;
-    r4.r = temp[0]; r4.phi = temp[1]; r4.dr = temp[2]; r4.dphi = temp[3];
+    Ray r4 = ray; r4.r=temp[0]; r4.phi=temp[1]; r4.dr=temp[2]; r4.dphi=temp[3];
     geodesicRHS(r4, k4, rs);
 
-    // Final update
-    ray.r   += (dλ/6.0) * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
-    ray.phi   += (dλ/6.0) * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
-    ray.dr  += (dλ/6.0) * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
-    ray.dphi  += (dλ/6.0) * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+    ray.r    += (dλ/6.0)*(k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+    ray.phi  += (dλ/6.0)*(k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+    ray.dr   += (dλ/6.0)*(k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+    ray.dphi += (dλ/6.0)*(k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
 }
 
 
-// --- MAIN --- //
-int main() {
-    Engine engine;
-    physics phys;
-    vector<Ray> rays;
+int main () {
+    //rays.push_back(Ray(vec2(-1e11, 3.27606302719999999e10), vec2(c, 0.0f)));
+    while(!glfwWindowShouldClose(engine.window)) {
+        engine.run();
+        SagA.draw();
 
-    //engine.initRays(rays);
-    rays.push_back({ vec2(1800.0f, 1200.0f), vec2(-c, 0.0f) });
-    rays.push_back({ vec2(1200.0f, 1000.0f), vec2(-c, 0.0f) });
-
-    // point engine to rays vector
-    engine.raysPtr = &rays;
-    double rs_m = phys.r_s;
-
-    // --- LOOP --- //
-    while (!glfwWindowShouldClose(engine.window)) {
-        glClear(GL_COLOR_BUFFER_BIT);
-        engine.applyView();
-        glLoadIdentity();
-
-        // Update rays
-        float dt = 0.001f;
         for (auto& ray : rays) {
-
-            // - Check Event Horizon - //
-            if (length(vec2(ray.x, ray.y) - blackHolePos) < phys.rs_m()) {continue;};
-
-            ray.step(dt, phys.rs_m()); // evolve physics (r,φ,dr,dφ)
-
+            ray.step(1.0f, SagA.r_s);
+            ray.draw(rays);
         }
 
-
-        // Render scene
-        engine.renderScreen(phys.rs_m(), rays);
+        glfwSwapBuffers(engine.window);
+        glfwPollEvents();
     }
 
     return 0;
