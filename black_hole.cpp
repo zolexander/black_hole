@@ -5,57 +5,147 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <iostream>
+#define _USE_MATH_DEFINES
 #include <cmath>
-// #include <cuda_runtime.h>
-// #include <cuda_gl_interop.h>
-// #include <device_launch_parameters.h>
-
+#include <sstream>
+#include <iomanip>
+#include <cstring>
+#include <chrono>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 using namespace glm;
 using namespace std;
+using Clock = std::chrono::high_resolution_clock;
 
-// global vars
-const int WIDTH = 800;
-const int HEIGHT = 600;
-const float G = 6.67430 * pow(10, -11);
+// VARS
+double lastPrintTime = 0.0;
+int    framesCount   = 0;
+double c = 299792458.0;
+double G = 6.67430e-11;
+bool useGeodesics = false;
 
-// functions
+struct Camera {
+    vec3 pos;
+    vec3 target;
+    float fovY;
+    float azimuth, elevation, radius;
+    float minRadius = 1e12f, maxRadius = 1e20f;
+    bool dragging = false;
+    bool panning = false;
+    double lastX = 0, lastY = 0;
 
-// structures and classes :D
-class Engine{
-public:
-    // -- Quad & Texture render
+    // Adjustable speeds
+    float orbitSpeed = 0.008f;
+    float panSpeed = 0.001f;
+    float zoomSpeed = 1.08f; // closer to 1 = slower zoom
+
+    Camera() : azimuth(0), elevation(M_PI / 2.0f), radius(6.34194e10), fovY(60.0f) {
+        target = vec3(0, 0, 0);
+        updateVectors();
+    }
+
+    void updateVectors() {
+        pos.x = target.x + radius * sin(elevation) * cos(azimuth);
+        pos.y = target.y + radius * cos(elevation);
+        pos.z = target.z + radius * sin(elevation) * sin(azimuth);
+    }
+    void processMouse(GLFWwindow* window, double xpos, double ypos) {
+        float dx = float(xpos - lastX), dy = float(ypos - lastY);
+        if (dragging && !panning) {
+            // Orbit
+            azimuth   -= dx * orbitSpeed;
+            elevation -= dy * orbitSpeed;
+            elevation = clamp(elevation, 0.01f, float(M_PI)-0.01f);
+        } else if (panning) {
+            // Pan (move target in camera plane)
+            vec3 forward = normalize(target - pos);
+            vec3 right = normalize(cross(forward, vec3(0,1,0)));
+            vec3 up = cross(right, forward);
+            target += -right * dx * panSpeed * radius + up * dy * panSpeed * radius;
+        }
+        updateVectors();
+        lastX = xpos; lastY = ypos;
+    }
+    void processScroll(double yoffset) {
+        // Zoom (dolly in/out)
+        if (yoffset < 0)
+            radius *= pow(zoomSpeed, -yoffset);
+        else
+            radius /= pow(zoomSpeed, yoffset);
+        radius = clamp(radius, minRadius, maxRadius);
+        updateVectors();
+    }
+    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+        Camera* cam = (Camera*)glfwGetWindowUserPointer(window);
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            if (action == GLFW_PRESS) {
+                cam->dragging = true;
+                cam->panning = (mods & GLFW_MOD_SHIFT);
+                double x, y; glfwGetCursorPos(window, &x, &y);
+                cam->lastX = x; cam->lastY = y;
+            } else if (action == GLFW_RELEASE) {
+                cam->dragging = false;
+                cam->panning = false;
+            }
+        }
+    }
+    static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+        Camera* cam = (Camera*)glfwGetWindowUserPointer(window);
+        cam->processMouse(window, xpos, ypos);
+    }
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+        Camera* cam = (Camera*)glfwGetWindowUserPointer(window);
+        cam->processScroll(yoffset);
+    }
+};
+Camera camera;
+
+struct Ray;
+void rk4Step(Ray& ray, double dλ, double rs);
+
+struct Engine {
+    // -- Quad & Texture render -- //
     GLFWwindow* window;
     GLuint quadVAO;
     GLuint texture;
     GLuint shaderProgram;
-
-    Engine(){
-        this->window = StartGLFW();
+    int WIDTH = 800;
+    int HEIGHT = 600;
+    float width = 100000000000.0f; // Width of the viewport in meters
+    float height = 75000000000.0f; // Height of the viewport in meters
+    
+    Engine() {
+        if (!glfwInit()) {
+            cerr << "GLFW init failed\n";
+            exit(EXIT_FAILURE);
+        }
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        window = glfwCreateWindow(WIDTH, HEIGHT, "Black Hole", nullptr, nullptr);
+        if (!window) {
+            cerr << "Failed to create GLFW window\n";
+            glfwTerminate();
+            exit(EXIT_FAILURE);
+        }
+        glfwMakeContextCurrent(window);
+        glewExperimental = GL_TRUE;
+        GLenum glewErr = glewInit();
+        if (glewErr != GLEW_OK) {
+            cerr << "Failed to initialize GLEW: "
+                << (const char*)glewGetErrorString(glewErr)
+                << "\n";
+            glfwTerminate();
+            exit(EXIT_FAILURE);
+        }
+        cout << "OpenGL " << glGetString(GL_VERSION) << "\n";
         this->shaderProgram = CreateShaderProgram();
-        
+
         auto result = QuadVAO();
         this->quadVAO = result[0];
         this->texture = result[1];
     }
-    GLFWwindow* StartGLFW(){
-        if(!glfwInit()){
-            std::cerr<<"glfw failed init, PANIC PANIC!"<<std::endl;
-            return nullptr;
-        }
-
-        GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "ray tracer", NULL, NULL);
-        glfwMakeContextCurrent(window);
-        
-        glewExperimental = GL_TRUE;
-        if (glewInit() != GLEW_OK) {
-            std::cerr << "Failed to initialize GLEW." << std::endl;
-            glfwTerminate();
-            return nullptr;
-        }
-
-        glViewport(0, 0, WIDTH, HEIGHT);
-        return window;
-    };
     GLuint CreateShaderProgram(){
         const char* vertexShaderSource = R"(
         #version 330 core
@@ -96,8 +186,7 @@ public:
 
         return shaderProgram;
     };
-
-    std::vector<GLuint> QuadVAO(){
+    vector<GLuint> QuadVAO(){
         float quadVertices[] = {
             // positions   // texCoords
             -1.0f,  1.0f,  0.0f, 1.0f,  // top left
@@ -128,10 +217,10 @@ public:
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        std::vector<GLuint> VAOtexture = {VAO, texture};
+        vector<GLuint> VAOtexture = {VAO, texture};
         return VAOtexture;
     }
-    void renderScene(const std::vector<unsigned char>& pixels, int texWidth, int texHeight) {
+    void renderScene(const vector<unsigned char>& pixels, int texWidth, int texHeight) {
         // update texture w/ ray-tracing results
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texWidth, texHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
@@ -149,338 +238,230 @@ public:
         glfwSwapBuffers(window);
         glfwPollEvents();
     };
-    std::vector<int> OptimizeMovement(double lastMovementTime){
-        double currentTime = glfwGetTime();
-        bool isMoving = (currentTime - lastMovementTime < 0.2);
-        int renderFactor = isMoving ? 4 : 2;
-        int rWidth = WIDTH / renderFactor;
-        int rHeight = HEIGHT / renderFactor;
-        std::vector<int> vec = {rWidth, rHeight};
-        return vec;
-    }
-};
-class Camera{
-public:
-    vec3 target;
-    float distance;
-    float pitch;
-    float yaw;
-    vec3 position;
-    vec3 up;
-    
-    // mouse handling
-    bool middleMousePressed = false;
-    double lastX = 0.0, lastY = 0.0;
-    float orbitSpeed = 0.4f;
-    float zoomSpeed = 2.0f;
-
-    float fov = 60.0f; 
-    double lastMovementTime = 0.0;
-    // default: look at (0,0,0), 5 units far.
-    Camera(vec3 t = vec3(0.0f, 0.0f, -19.0f), float dist = 5.0f, float yawVal = -90.0f, float pitchVal = 0.0f, float fovVal = 90.0f)
-        : target(t), distance(dist), yaw(yawVal), pitch(pitchVal), fov(fovVal) {
-        up = vec3(0, 1, 0);
-        updatePosition();
-    }
-    void updatePosition() {
-        float radYaw = radians(yaw);
-        float radPitch = radians(pitch);
-        position.x = target.x + distance * cos(radPitch) * cos(radYaw);
-        position.y = target.y + distance * sin(radPitch);
-        position.z = target.z + distance * cos(radPitch) * sin(radYaw);
-    }
-    
-    // Member function to handle mouse button events.
-    void handleMouseButton(int button, int action, int mods, GLFWwindow* window) {
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-            if (action == GLFW_PRESS) {
-                middleMousePressed = true;
-                glfwGetCursorPos(window, &lastX, &lastY);
-                lastMovementTime = glfwGetTime();
-            } else if (action == GLFW_RELEASE) {
-                middleMousePressed = false;
+    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+        if (action == GLFW_PRESS) {
+            if (key == GLFW_KEY_G) {
+                useGeodesics = !useGeodesics;
+                cout << "Geodesics: " << (useGeodesics ? "ON\n" : "OFF\n");
             }
         }
     }
-    void handleCursorPosition(double xpos, double ypos, GLFWwindow* window) {
-        if (!middleMousePressed)
-            return;
-
-        double deltaX = xpos - lastX;
-        double deltaY = -(ypos - lastY);
-
-        // If shift is held, pan the camera's target.
-        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-            vec3 forward = normalize(target - position);
-            vec3 right = normalize(cross(forward, up));
-            vec3 camUp = cross(right, forward);
-            float panSpeed = 0.005f * distance;
-            target += -right * (float)deltaX * panSpeed + camUp * (float)deltaY * panSpeed;
-        }
-        // Otherwise, orbit the camera.
-        else {
-            yaw   += (float)deltaX * orbitSpeed;
-            pitch += (float)deltaY * orbitSpeed;
-            if (pitch > 89.0f)  pitch = 89.0f;
-            if (pitch < -89.0f) pitch = -89.0f;
-        }
-        updatePosition();
-        lastX = xpos;
-        lastY = ypos;
-        lastMovementTime = glfwGetTime();
-    }
-    void handleScroll(double xoffset, double yoffset, GLFWwindow* window) {
-        // If this is the first input, initialize mouse position
-        if (lastX == 0 && lastY == 0) {
-            glfwGetCursorPos(window, &lastX, &lastY);
-        }
-
-        distance -= (float)yoffset * zoomSpeed;
-        if (distance < 1.0f)
-            distance = 1.0f;
-        
-        updatePosition();
-        lastMovementTime = glfwGetTime();
-    }
-    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-        Camera* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
-        cam->handleMouseButton(button, action, mods, window);
-    }
-    static void cursorPositionCallback(GLFWwindow* window, double xpos, double ypos) {
-        Camera* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
-        cam->handleCursorPosition(xpos, ypos, window);
-    }
-    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-        Camera* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
-        cam->handleScroll(xoffset, yoffset, window);
-    }
-
-    void registerCallbacks(GLFWwindow* window) {
-        glfwSetWindowUserPointer(window, this);
-        glfwSetMouseButtonCallback(window, Camera::mouseButtonCallback);
-        glfwSetCursorPosCallback(window, Camera::cursorPositionCallback);
-        glfwSetScrollCallback(window, Camera::scrollCallback);
-    }
 };
-
-struct Ray{
-    vec3 direction;
-    vec3 origin;
-    Ray(vec3 o, vec3 d) : origin(o), direction(normalize(d)){}
-};
-struct Material{
-    vec3 color;
-    float specular;
-    float emission;
-    float shiny;
-    Material(vec3 c, float s, float e, float sh = 4.0) : color(c), specular(s), emission(e), shiny(sh) {}
-};
-struct Object{
+Engine engine;
+struct BlackHole {
     vec3 position;
-    vec3 velocity;
-    float radius;
-    float mass = 7.3 * pow(10, 22);
-    Material material;
+    double mass;
+    double radius;
+    double r_s;
 
-    Object(vec3 p, float r, Material m, vec3 v = vec3(0.0)) : position(p), radius(r), material(m), velocity(v) {}
-    // raytracing
-    bool Intersect(Ray &ray, float &t) const {
-        vec3 oc = ray.origin - position;             // centre to origin
-        float a = dot(ray.direction, ray.direction); // ray straightness / magnitute
-        float b = 2.0f * dot(oc, ray.direction);     // orientation towards 
-        float c = dot(oc, oc) - radius * radius;     // adjustment by sphere radius
-        double discriminant = b*b - 4*a*c;
-        if(discriminant < 0){return false;}          // no intersection with sphere
+    BlackHole(vec3 pos, float m) : position(pos), mass(m) {r_s = 2.0 * G * mass / (c*c);}
+    bool Intercept(float px, float py, float pz) const {
+        float dx = px - position.x;
+        float dy = py - position.y;
+        float dz = pz - position.z;
+        float dist2 = dx * dx + dy * dy + dz * dz;
+        return dist2 < r_s * r_s;
+    }
+};
+BlackHole SagA(vec3(0.0f, 0.0f, 0.0f), 8.54e36); // Sagittarius A black hole
+struct Ray{
+    // -- cartesian coords -- //
+    double x;   double y; double z;
+    // -- polar coords -- //
+    double r;   double phi; double theta;
+    double dr;  double dphi; double dtheta;
+    double E, L;             // conserved quantities
 
-        float intercept = (-b - sqrt(discriminant)) / (2.0f*a);
-        // if(intercept < 0){
-        //     intercept = (-b + sqrt(discriminant)) / (2.0f*a);
-        //     if(intercept<0){return false;}           // intersection is behind origin
-        // }
-        t = intercept;
-        return true;
-    };
-    vec3 getNormal(vec3 &point) const{
-        return normalize(point - position);
+    Ray(vec3 pos, vec3 dir) : x(pos.x), y(pos.y), z(pos.z) {
+        // Step 1: get spherical coords (r, theta, phi)
+        r = sqrt(x*x + y*y + z*z);
+        theta = acos(z / r);
+        phi = atan2(y, x);
+
+        // Step 2: seed velocities (dr, dtheta, dphi)
+        // Convert direction to spherical basis
+        double dx = dir.x, dy = dir.y, dz = dir.z;
+        dr     = sin(theta)*cos(phi)*dx + sin(theta)*sin(phi)*dy + cos(theta)*dz;
+        dtheta = cos(theta)*cos(phi)*dx + cos(theta)*sin(phi)*dy - sin(theta)*dz;
+        dtheta /= r;
+        dphi   = -sin(phi)*dx + cos(phi)*dy;
+        dphi  /= (r * sin(theta));
+
+        // Step 3: store conserved quantities
+        L = r * r * sin(theta) * dphi;
+        double f = 1.0 - SagA.r_s / r;
+        double dt_dλ = sqrt((dr*dr)/f + r*r*dtheta*dtheta + r*r*sin(theta)*sin(theta)*dphi*dphi);
+        E = f * dt_dλ;
     }
-    void UpdatePos(){
-        this->position[0] += this->velocity[0];
-        this->position[1] += this->velocity[1];
-        this->position[2] += this->velocity[2];
-    }
-    // gravity
-    void accelerate(float x, float y, float z){
-        this->velocity[0] += x;
-        this->velocity[1] += y;
-        this->velocity[2] += z;
+    void step(double dλ, double rs) {
+        if (r <= rs) return;
+        rk4Step(*this, dλ, rs);
+        // convert back to cartesian
+        this->x = r * sin(theta) * cos(phi);
+        this->y = r * sin(theta) * sin(phi);
+        this->z = r * cos(theta);
     }
 };
 
-class Scene {
-public:
-    std::vector<Object> objs;
-    //std::vector<Object> lightPos;
-    vector<const Object*> lights;
+void raytrace(vector<unsigned char>& pixels, int W, int H) {
+    pixels.resize(W * H * 3);
 
-    vec3 trace(Ray &ray, int depth = 0){
-        const int maxDepth = 4;
-        if (depth >= maxDepth) return vec3(0.0f, 0.0f, 0.0f);
+    // build camera basis
+    vec3 forward = normalize(camera.target - camera.pos);
+    vec3 right   = normalize(cross(forward, vec3(0,1,0)));
+    vec3 up      = cross(right, forward);
+    float aspect = float(W) / float(H);
+    float tanHalfFov = tan(radians(camera.fovY) * 0.5f);
 
-        float closest = INFINITY;
-        const Object* hitObj = nullptr;
+    #pragma omp parallel for schedule(dynamic, 4)
+    for(int y = 0; y < H; ++y) {
+        for(int x = 0; x < W; ++x) {
+            // NDC → screen space in [−1,1]
+            float u = (2.0f * (x + 0.5f) / float(W)  - 1.0f) * aspect * tanHalfFov;
+            float v = (1.0f - 2.0f * (y + 0.5f) / float(H))        * tanHalfFov;
+            vec3 dir = normalize(u*right + v*up + forward);
 
-        for(auto& obj : objs){
-            float t;                    // distance to intersection
-            if(obj.Intersect(ray, t)){
-                if(t < closest) {
-                    closest = t;
-                    hitObj = &obj;
+            // construct your Ray
+            Ray ray(camera.pos,  dir);
+
+            const int MAX_STEPS = 10000;
+            const double D_LAMBDA = 1e7;
+            const double ESCAPE_R = 1e14;
+
+            // 2) march the ray forward in λ
+            vec3 color(0.0f);
+            if (!useGeodesics) {
+                double b = 2.0 * dot(camera.pos, dir);
+                double c0 = dot(camera.pos, camera.pos) - SagA.r_s*SagA.r_s;
+                double disc = b*b - 4.0*c0;
+                if (disc > 0.0) {
+                    double t1 = (-b - sqrt(disc)) * 0.5;
+                    double t2 = (-b + sqrt(disc)) * 0.5;
+                    if (t1 > 0.0 || t2 > 0.0)
+                        color = vec3(1.0f, 0.0f, 0.0f);
                 }
             }
-        };
-
-        if(!hitObj){return vec3(0.05f, 0.05f, 0.1f);}
-        
-        // hit
-        vec3 hitPoint = ray.origin + ray.direction * closest;     // point on obj hit by ray
-        vec3 normal = hitObj->getNormal(hitPoint);
-        vec3 viewDir = normalize(-ray.direction);                 // direction to camera
-        vec3 finalColor = hitObj->material.color * 0.3f;
-
-        if (hitObj->material.emission > 0.0f) {
-            finalColor += hitObj->material.color * hitObj->material.emission;
-        }
-
-        for(auto& light : lights) {
-            if (light == hitObj) continue;
-            vec3 lightDir = normalize(light->position - hitPoint); // light to hitpoint dir
-            float distanceToLight = length(light->position - hitPoint);
-            if (distanceToLight < 0.001f) continue;
-
-            // Compute diffuse lighting
-            vec3 lightColor = light->material.color * light->material.emission;
-            float diff = std::max(dot(normal, lightDir), 0.0f);
-            float attenuation = 1.0f / (distanceToLight * distanceToLight);
-            vec3 diffuse = hitObj->material.color * lightColor * diff * attenuation;
-
-            // Compute specular Lighting
-            vec3 reflectDir = reflect(-lightDir, normal);
-            float spec = pow(std::max(dot(viewDir, reflectDir), 0.0f), hitObj->material.shiny);
-            vec3 specular = lightColor * hitObj->material.specular * spec * attenuation;
-
-            Ray shadowRay(hitPoint + normal * 0.001f, lightDir);
-            bool inShadow = false;
-            for(const auto& obj : objs) {
-                if (&obj != hitObj) {
-                    float t;
-                    if (obj.Intersect(shadowRay, t) && t < distanceToLight) {
-                        inShadow = true;
+            else {
+                // full null‐geodesic march
+                Ray ray(camera.pos, dir);
+                for(int i = 0; i < MAX_STEPS; ++i) {
+                    if (SagA.Intercept(ray.x, ray.y, ray.z)) {
+                        color = vec3(1.0f, 0.0f, 0.0f);
+                        break;
+                    }
+                    ray.step(D_LAMBDA, SagA.r_s);
+                    if (ray.r > ESCAPE_R) {
+                        // escaped to infinity → remains black
                         break;
                     }
                 }
             }
-            // Add light contribution if not in shadow
-            if (!inShadow) {
-                finalColor += diffuse + specular;
-            }
 
+            int idx = (y * W + x) * 3;
+            pixels[idx+0] = (unsigned char)(color.r * 255);
+            pixels[idx+1] = (unsigned char)(color.g * 255);
+            pixels[idx+2] = (unsigned char)(color.b * 255);
         }
-        if(hitObj->material.specular > 0.0f) {
-            vec3 reflectDir = reflect(ray.direction, normal); // Reflect ray direction
-            Ray reflectRay(hitPoint + normal * 0.001f, reflectDir);
-            vec3 reflectedColor = trace(reflectRay, depth + 1); // Recurse
-            finalColor += reflectedColor * hitObj->material.specular * 0.3f; // Add reflection scaled by specular intensity
-        }
-        return finalColor;
-    };
-};
-
-// --- main loop ---- //
-int main(){
-    Engine engine;
-    Scene scene;
-    Camera camera(vec3(0.0f, 0.0f, -9.0f), -15.0f, -90.0f, 0.0f, 90.0f);
-    camera.registerCallbacks(engine.window);
-
-    scene.objs = {
-                      // position     radius   material:  color               specular   emission
-        Object(vec3(0.0f, -5.0f, -19.0f), 12.0f, Material(vec3(1.0f, 0.0f, 0.0f), 0.9f, 10.0f)),
-        Object(vec3(20.0f, -2.0f, -11.0f), 5.5f, Material(vec3(0.1f, 1.0f, 0.1f), 0.2f, 0.5f)),
-        Object(vec3(-17.0f, -1.0f, -6.0f), 7.0f, Material(vec3(0.1f, 0.1f, 1.0f), 0.8f, 0.3f)),
-        Object(vec3(-17.0f, -10.0f, 9.0f), 7.0f, Material(vec3(0.1f, 1.0f, 1.0f), 0.0f, 0.3f)),
-    };
-    // -- loop -- //
-    double lastFrame = glfwGetTime();
-    while(!glfwWindowShouldClose(engine.window)){
-        glClear(GL_COLOR_BUFFER_BIT);
-        double currentTime = glfwGetTime();
-        double deltaTime = currentTime - lastFrame;
-        lastFrame = currentTime;
-
-        int rWidth = engine.OptimizeMovement(camera.lastMovementTime)[0];
-        int rHeight = engine.OptimizeMovement(camera.lastMovementTime)[1];
-        std::vector<unsigned char> pixels(rWidth * rHeight * 3);
-
-        // Update light sources
-        scene.lights.clear();
-        for (const auto& obj : scene.objs) {
-            if (obj.material.emission > 0.0f) {
-                scene.lights.push_back(&obj);
-            }
-        }
-
-        // render texture (pxl by pxl)
-        for(int y = 0; y < rHeight; ++y){
-            for(int x = 0; x < rWidth; ++x){
-                float scale = tan(radians(camera.fov * 0.5f));
-
-                float aspectRatio = float(rWidth) / float(rHeight);
-                float u = float(x) / float(rWidth); // % of width
-                float v = float(y) / float(rHeight); // % of height
-                
-                // Convert screen coordinates to camera space coordinates with FOV adjustment
-                float x_camera = (2.0f * u - 1.0f) * aspectRatio * scale;
-                float y_camera = (1.0f - 2.0f * v) * scale; // (1 - 2*v) is equivalent to -(2*v - 1)
-
-                // Transform the ray from camera space to world space.
-                vec3 forward = normalize(camera.target - camera.position);
-                vec3 right = normalize(cross(forward, vec3(0.0f, 1.0f, 0.0f)));
-                vec3 up = cross(right, forward);
-
-                vec3 direction = normalize(x_camera * right + y_camera * up + forward);
-
-                Ray ray(camera.position, direction);
-                vec3 color = scene.trace(ray);
-                color = color / (color + vec3(0.5f));  // Reinhard tone mapping
-                color = clamp(color, 0.0f, 1.0f);
-
-                int index = (y * rWidth  + x) * 3;
-                pixels[index + 0] = static_cast<unsigned char>(color.r * 255);
-                pixels[index + 1] = static_cast<unsigned char>(color.g * 255);
-                pixels[index + 2] = static_cast<unsigned char>(color.b * 255);
-            }
-        }
-
-        for(auto& obj : scene.objs) {
-            if(obj.position[1] > 0){
-                obj.velocity *= -0.8f;
-                obj.position[1] = 0.1f;
-            }
-            obj.accelerate(0.0, 9.81 * deltaTime, 0.0);
-            obj.UpdatePos();
-        }
-        
-        engine.renderScene(pixels, rWidth, rHeight);
     }
-
-    glfwTerminate();
 }
 
+void geodesicRHS(const Ray& ray, double rhs[6], double rs) {
+    double r = ray.r;
+    double theta = ray.theta;
+    double dr = ray.dr;
+    double dtheta = ray.dtheta;
+    double dphi = ray.dphi;
+    double E = ray.E;
 
-// func dec's
+    double f = 1.0 - rs / r;
+    double dt_dlambda = E / f;
 
+    // First derivatives
+    rhs[0] = dr;
+    rhs[1] = dtheta;
+    rhs[2] = dphi;
 
+    // Second derivatives (from 3D Schwarzschild null geodesics):
+    rhs[3] = 
+        - (rs / (2 * r * r)) * f * dt_dlambda * dt_dlambda
+        + (rs / (2 * r * r * f)) * dr * dr
+        + r * (dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi);
 
+    rhs[4] = 
+        - (2.0 / r) * dr * dtheta
+        + sin(theta) * cos(theta) * dphi * dphi;
 
+    rhs[5] = 
+        - (2.0 / r) * dr * dphi
+        - 2.0 * cos(theta) / sin(theta) * dtheta * dphi;
+}
+void addState(const double a[6], const double b[6], double factor, double out[6]) {
+    for (int i = 0; i < 6; i++)
+        out[i] = a[i] + b[i] * factor;
+}
+void rk4Step(Ray& ray, double dλ, double rs) {
+    double y0[6] = { ray.r, ray.theta, ray.phi, ray.dr, ray.dtheta, ray.dphi };
+    double k1[6], k2[6], k3[6], k4[6], temp[6];
 
+    geodesicRHS(ray, k1, rs);
+    addState(y0, k1, dλ/2.0, temp);
+    Ray r2 = ray;
+    r2.r = temp[0]; r2.theta = temp[1]; r2.phi = temp[2];
+    r2.dr = temp[3]; r2.dtheta = temp[4]; r2.dphi = temp[5];
+    geodesicRHS(r2, k2, rs);
+
+    addState(y0, k2, dλ/2.0, temp);
+    Ray r3 = ray;
+    r3.r = temp[0]; r3.theta = temp[1]; r3.phi = temp[2];
+    r3.dr = temp[3]; r3.dtheta = temp[4]; r3.dphi = temp[5];
+    geodesicRHS(r3, k3, rs);
+
+    addState(y0, k3, dλ, temp);
+    Ray r4 = ray;
+    r4.r = temp[0]; r4.theta = temp[1]; r4.phi = temp[2];
+    r4.dr = temp[3]; r4.dtheta = temp[4]; r4.dphi = temp[5];
+    geodesicRHS(r4, k4, rs);
+
+    ray.r      += (dλ/6.0)*(k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+    ray.theta  += (dλ/6.0)*(k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+    ray.phi    += (dλ/6.0)*(k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+    ray.dr     += (dλ/6.0)*(k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+    ray.dtheta += (dλ/6.0)*(k1[4] + 2*k2[4] + 2*k3[4] + k4[4]);
+    ray.dphi   += (dλ/6.0)*(k1[5] + 2*k2[5] + 2*k3[5] + k4[5]);
+}
+
+void setupCameraCallbacks(GLFWwindow* window) {
+    glfwSetWindowUserPointer(window, &camera);
+    glfwSetMouseButtonCallback(window, Camera::mouseButtonCallback);
+    glfwSetCursorPosCallback(window, Camera::cursorPosCallback);
+    glfwSetScrollCallback(window, Camera::scrollCallback);
+    glfwSetKeyCallback(window, Engine::keyCallback);
+}
+
+// -- MAIN -- //
+int main() {
+    setupCameraCallbacks(engine.window);
+    vector<unsigned char> pixels(engine.WIDTH * engine.HEIGHT * 3);
+
+    auto t0 = Clock::now();
+    lastPrintTime = std::chrono::duration<double>(t0.time_since_epoch()).count();
+
+    while (!glfwWindowShouldClose(engine.window)) {
+        raytrace(pixels, engine.WIDTH, engine.HEIGHT);
+        engine.renderScene(pixels, engine.WIDTH, engine.HEIGHT);
+
+        // 2) FPS counting
+        framesCount++;
+        auto t1 = Clock::now();
+        double now = std::chrono::duration<double>(t1.time_since_epoch()).count();
+        if (now - lastPrintTime >= 1.0) {
+            cout << "FPS: " << framesCount / (now - lastPrintTime) << "\n";
+            framesCount   = 0;
+            lastPrintTime = now;
+        }
+    }
+
+    glfwDestroyWindow(engine.window);
+    glfwTerminate();
+    return 0;
+}
