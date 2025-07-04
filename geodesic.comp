@@ -1,0 +1,164 @@
+#version 430
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) writeonly uniform image2D outImage;
+layout(std140, binding = 1) uniform Camera {
+    vec3 camPos;     float _pad0;
+    vec3 camRight;   float _pad1;
+    vec3 camUp;      float _pad2;
+    vec3 camForward; float _pad3;
+    float tanHalfFov;
+    float aspect;
+    int useGeodesics;
+    int _pad4;
+} cam;
+
+layout(std140, binding = 2) uniform Disk {
+    float disk_r1; // Inner radius
+    float disk_r2; // Outer radius
+    float disk_q;  // Emissivity falloff exponent
+    float _pad5;
+};
+
+// Constants
+const float SagA_rs = 1.269e10; // 2GM/c² for 8.54e36 kg
+const float D_LAMBDA = 1e7;
+const double ESCAPE_R = 1e20;
+
+const int WIDTH  = 400;
+const int HEIGHT = 300;
+
+// Ray struct & constructor
+struct Ray {
+    float x, y, z, r, theta, phi;
+    float dr, dtheta, dphi;
+    float E, L;
+};
+
+Ray initRay(vec3 pos, vec3 dir) {
+    Ray ray;
+    ray.x = pos.x; ray.y = pos.y; ray.z = pos.z;
+    ray.r = length(pos);
+    ray.theta = acos(pos.z / ray.r);
+    ray.phi = atan(pos.y, pos.x);
+
+    float dx = dir.x, dy = dir.y, dz = dir.z;
+    ray.dr     = sin(ray.theta)*cos(ray.phi)*dx + sin(ray.theta)*sin(ray.phi)*dy + cos(ray.theta)*dz;
+    ray.dtheta = (cos(ray.theta)*cos(ray.phi)*dx + cos(ray.theta)*sin(ray.phi)*dy - sin(ray.theta)*dz) / ray.r;
+    ray.dphi   = (-sin(ray.phi)*dx + cos(ray.phi)*dy) / (ray.r * sin(ray.theta));
+
+    ray.L = ray.r * ray.r * sin(ray.theta) * ray.dphi;
+    float f = 1.0 - SagA_rs / ray.r;
+    float dt_dL = sqrt((ray.dr*ray.dr)/f + ray.r*ray.r*(ray.dtheta*ray.dtheta + sin(ray.theta)*sin(ray.theta)*ray.dphi*ray.dphi));
+    ray.E = f * dt_dL;
+
+    return ray;
+}
+
+bool intercept(Ray ray, float rs) {
+    return ray.r <= rs;
+}
+
+void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
+    float r = ray.r, theta = ray.theta;
+    float dr = ray.dr, dtheta = ray.dtheta, dphi = ray.dphi;
+    float f = 1.0 - SagA_rs / r;
+    float dt_dL = ray.E / f;
+
+    d1 = vec3(dr, dtheta, dphi);
+    d2.x = - (SagA_rs / (2.0 * r*r)) * f * dt_dL * dt_dL
+         + (SagA_rs / (2.0 * r*r * f)) * dr * dr
+         + r * (dtheta*dtheta + sin(theta)*sin(theta)*dphi*dphi);
+    d2.y = -2.0*dr*dtheta/r + sin(theta)*cos(theta)*dphi*dphi;
+    d2.z = -2.0*dr*dphi/r - 2.0*cos(theta)/(sin(theta)) * dtheta * dphi;
+}
+
+void rk4Step(inout Ray ray, float dL) {
+    vec3 k1a, k1b, k2a, k2b, k3a, k3b, k4a, k4b;
+    geodesicRHS(ray, k1a, k1b);
+
+    Ray r2;
+    r2.r = ray.r + dL*0.5*k1a.x; r2.theta = ray.theta + dL*0.5*k1a.y; r2.phi = ray.phi + dL*0.5*k1a.z;
+    r2.dr = ray.dr + dL*0.5*k1b.x; r2.dtheta = ray.dtheta + dL*0.5*k1b.y; r2.dphi = ray.dphi + dL*0.5*k1b.z;
+    r2.E = ray.E;
+    geodesicRHS(r2, k2a, k2b);
+
+    Ray r3;
+    r3.r = ray.r + dL*0.5*k2a.x; r3.theta = ray.theta + dL*0.5*k2a.y; r3.phi = ray.phi + dL*0.5*k2a.z;
+    r3.dr = ray.dr + dL*0.5*k2b.x; r3.dtheta = ray.dtheta + dL*0.5*k2b.y; r3.dphi = ray.dphi + dL*0.5*k2b.z;
+    r3.E = ray.E;
+    geodesicRHS(r3, k3a, k3b);
+
+    Ray r4;
+    r4.r = ray.r + dL*k3a.x; r4.theta = ray.theta + dL*k3a.y; r4.phi = ray.phi + dL*k3a.z;
+    r4.dr = ray.dr + dL*k3b.x; r4.dtheta = ray.dtheta + dL*k3b.y; r4.dphi = ray.dphi + dL*k3b.z;
+    r4.E = ray.E;
+    geodesicRHS(r4, k4a, k4b);
+
+    ray.r      += dL/6.0 * (k1a.x + 2*k2a.x + 2*k3a.x + k4a.x);
+    ray.theta  += dL/6.0 * (k1a.y + 2*k2a.y + 2*k3a.y + k4a.y);
+    ray.phi    += dL/6.0 * (k1a.z + 2*k2a.z + 2*k3a.z + k4a.z);
+    ray.dr     += dL/6.0 * (k1b.x + 2*k2b.x + 2*k3b.x + k4b.x);
+    ray.dtheta += dL/6.0 * (k1b.y + 2*k2b.y + 2*k3b.y + k4b.y);
+    ray.dphi   += dL/6.0 * (k1b.z + 2*k2b.z + 2*k3b.z + k4b.z);
+
+    ray.x = ray.r * sin(ray.theta) * cos(ray.phi);
+    ray.y = ray.r * sin(ray.theta) * sin(ray.phi);
+    ray.z = ray.r * cos(ray.theta);
+}
+
+bool crossesEquatorialPlane(vec3 oldPos, vec3 newPos) {
+    bool crossed = (oldPos.z * newPos.z < 0.0);
+    float r = length(vec2(newPos.x, newPos.y));
+    return crossed && (r >= disk_r1 && r <= disk_r2);
+}
+
+float emissivity(float r) {
+    if (r < disk_r1 || r > disk_r2) return 0.0;
+    return 10.0 / pow(r, disk_q);
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= WIDTH || pix.y >= HEIGHT) return;
+
+    float u = (2.0 * (pix.x + 0.5) / WIDTH - 1.0) * cam.aspect * cam.tanHalfFov;
+    float v = (1.0 - 2.0 * (pix.y + 0.5) / HEIGHT) * cam.tanHalfFov;
+    vec3 dir = normalize(u * cam.camRight + v * cam.camUp + cam.camForward);
+
+    vec4 color = vec4(0.0);
+    if (cam.useGeodesics == 1) {
+        Ray ray = initRay(cam.camPos, dir);
+        vec3 prevPos = vec3(ray.x, ray.y, ray.z);
+        float totalGlow = 0.0;
+
+        for (int i = 0; i < 20000; ++i) {
+            if (intercept(ray, SagA_rs)) {
+                color = vec4(1,0,0,1);
+                break;
+            }
+
+            rk4Step(ray, D_LAMBDA);
+            vec3 newPos = vec3(ray.x, ray.y, ray.z);
+
+            if (crossesEquatorialPlane(prevPos, newPos)) {
+                float r = length(vec2(newPos.x, newPos.y));
+                totalGlow += emissivity(r);
+            }
+
+            prevPos = newPos;
+            if (ray.r > ESCAPE_R) break;
+        }
+
+        if (totalGlow > 0.0) {
+ 
+            vec3 diskColor = vec3(1.0, 0.85, 0.2);
+            color = vec4(diskColor * 1.0, 1.0);
+        }
+    } else {
+        Ray ray = initRay(cam.camPos, dir);
+        color = (ray.r < SagA_rs) ? vec4(1,0,0,1) : vec4(0,0,0,1);
+    }
+
+    imageStore(outImage, pix, color);
+}
