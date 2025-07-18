@@ -28,15 +28,16 @@ double G = 6.67430e-11;
 bool useGeodesics = true;
 
 struct Camera {
-    vec3 target = vec3(0.0f);           // Point the camera looks at
-    float radius = 6.34194e10f;         // Distance from target
+    // Center the camera orbit on the black hole at (0, 0, 0)
+    vec3 target = vec3(0.0f, 0.0f, 0.0f); // Always look at the black hole center
+    float radius = 6.34194e10f;
     float minRadius = 1e10f, maxRadius = 1e12f;
 
-    float azimuth = 0.0f;               // Horizontal rotation
-    float elevation = M_PI / 2.0f;      // Vertical rotation
+    float azimuth = 0.0f;
+    float elevation = M_PI / 2.0f;
 
     float orbitSpeed = 0.01f;
-    float panSpeed = 0.01f; // reduced to avoid excessive movement
+    float panSpeed = 0.01f;
     double zoomSpeed = 25e9f;
 
     bool dragging = false;
@@ -46,14 +47,16 @@ struct Camera {
     // Calculate camera position in world space
     vec3 position() const {
         float clampedElevation = clamp(elevation, 0.01f, float(M_PI) - 0.01f);
-        return target + vec3(
+        // Orbit around (0,0,0) always
+        return vec3(
             radius * sin(clampedElevation) * cos(azimuth),
             radius * cos(clampedElevation),
             radius * sin(clampedElevation) * sin(azimuth)
         );
     }
     void update() {
-        // You could add smoothing/caching here if needed
+        // Always keep target at black hole center
+        target = vec3(0.0f, 0.0f, 0.0f);
     }
 
     void processMouseMove(double x, double y) {
@@ -62,16 +65,8 @@ struct Camera {
 
         if (dragging && panning) {
             // Pan: Shift + Left or Middle Mouse
-            vec3 camPos = position();
-            vec3 forward = normalize(target - camPos);
-            vec3 worldUp = vec3(0, 1, 0);
-            vec3 right = normalize(cross(forward, worldUp));
-            vec3 up = normalize(cross(right, forward));
-
-            // Inverted direction to match drag feel
-            target -= right * dx * panSpeed * radius;
-            target += up * dy * panSpeed * radius;
-        } 
+            // Disable panning to keep camera centered on black hole
+        }
         else if (dragging && !panning) {
             // Orbit: Left mouse only
             azimuth   += dx * orbitSpeed;
@@ -87,8 +82,8 @@ struct Camera {
         if (button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_MIDDLE) {
             if (action == GLFW_PRESS) {
                 dragging = true;
-                panning = (button == GLFW_MOUSE_BUTTON_MIDDLE) || 
-                         (button == GLFW_MOUSE_BUTTON_LEFT && (mods & GLFW_MOD_SHIFT));
+                // Disable panning so camera always orbits center
+                panning = false;
                 glfwGetCursorPos(win, &lastX, &lastY);
             } else if (action == GLFW_RELEASE) {
                 dragging = false;
@@ -342,13 +337,16 @@ struct Engine {
             int _pad4;
         } data;
         vec3 fwd = normalize(cam.target - cam.position());
-        vec3 right = normalize(cross(fwd, vec3(0,1,0)));
-        vec3 up = cross(right, fwd);
+        vec3 up = vec3(0, 1, 0); // y axis is up, so disk is in x-z plane
+        vec3 right = normalize(cross(fwd, up));
+        up = cross(right, fwd);
 
-        data.pos = cam.position();     data.right = right;
-        data.up = up;           data.forward = fwd;
+        data.pos = cam.position();
+        data.right = right;
+        data.up = up;
+        data.forward = fwd;
         data.tanHalfFov = tan(radians(60.0f * 0.5f));
-        data.aspect = float(WIDTH) / float(HEIGHT); // Window aspect ratio
+        data.aspect = float(WIDTH) / float(HEIGHT);
         data.useGeodesics = useGeodesics;
 
         glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
