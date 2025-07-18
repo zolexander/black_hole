@@ -9,26 +9,31 @@ layout(std140, binding = 1) uniform Camera {
     vec3 camForward; float _pad3;
     float tanHalfFov;
     float aspect;
-    int useGeodesics;
-    int _pad4;
+    int   useGeodesics;
+    int   _pad4;
 } cam;
 
 layout(std140, binding = 2) uniform Disk {
-    float disk_r1; // Inner radius
-    float disk_r2; // Outer radius
-    float disk_q;  // Emissivity falloff exponent
+    float disk_r1;
+    float disk_r2;
+    float disk_q;
     float _pad5;
 };
 
-// Constants
-const float SagA_rs = 1.269e10; // 2GM/c² for 8.54e36 kg
+layout(std140, binding = 3) uniform Objects {
+    int   numObjects;
+    float _pad0, _pad1, _pad2;
+    vec4  objPosRadius[10];
+    vec4  objColor[10];
+};
+
+const float SagA_rs = 1.269e10;
 const float D_LAMBDA = 1e7;
 const double ESCAPE_R = 1e20;
 
 const int WIDTH  = 400;
 const int HEIGHT = 300;
 
-// Ray struct & constructor
 struct Ray {
     float x, y, z, r, theta, phi;
     float dr, dtheta, dphi;
@@ -131,15 +136,27 @@ void main() {
         Ray ray = initRay(cam.camPos, dir);
         vec3 prevPos = vec3(ray.x, ray.y, ray.z);
         float totalGlow = 0.0;
+        float lambda = 0.0;
+        float minLambda = 1e30;
+        vec3 objectColor = vec3(0.0);
+        bool hitBlackHole = false;
 
         for (int i = 0; i < 20000; ++i) {
             if (intercept(ray, SagA_rs)) {
-                color = vec4(1,0,0,1);
-                break;
+                hitBlackHole = true;
             }
 
             rk4Step(ray, D_LAMBDA);
+            lambda += D_LAMBDA;
             vec3 newPos = vec3(ray.x, ray.y, ray.z);
+
+            for(int j = 0; j < numObjects; j++) {
+                float dist = length(newPos - objPosRadius[j].xyz);
+                if (dist < objPosRadius[j].w && lambda < minLambda) {
+                    minLambda = lambda;
+                    objectColor = objColor[j].rgb;
+                }
+            }
 
             if (crossesEquatorialPlane(prevPos, newPos)) {
                 float r = length(vec2(newPos.x, newPos.y));
@@ -150,14 +167,44 @@ void main() {
             if (ray.r > ESCAPE_R) break;
         }
 
-        if (totalGlow > 0.0) {
- 
+        if (minLambda < 1e29) {
+            color = vec4(objectColor, 1.0);
+        } else if (totalGlow > 0.0) {
             vec3 diskColor = vec3(1.0, 0.85, 0.2);
             color = vec4(diskColor * 1.0, 1.0);
+        } else if (hitBlackHole) {
+            color = vec4(0.0, 0.0, 0.0, 1.0);
+        } else {
+            color = vec4(0.0);
         }
     } else {
         Ray ray = initRay(cam.camPos, dir);
         color = (ray.r < SagA_rs) ? vec4(1,0,0,1) : vec4(0,0,0,1);
+    }
+
+    for(int i = 0; i < numObjects; ++i) {
+        vec3 pos = objPosRadius[i].xyz;
+        float radius = objPosRadius[i].w;
+        vec3 col = objColor[i].rgb;
+
+        vec3 toObj = pos - cam.camPos;
+        float z = dot(toObj, cam.camForward);
+        if(z <= 0.0) continue;
+
+        float x = dot(toObj, cam.camRight);
+        float y = dot(toObj, cam.camUp);
+        float ndcX = (x / z) / (cam.tanHalfFov * cam.aspect);
+        float ndcY = (y / z) /  cam.tanHalfFov;
+
+        ivec2 center;
+        center.x = int((ndcX * 0.5 + 0.5) * float(WIDTH));
+        center.y = int((1.0 - (ndcY * 0.5 + 0.5)) * float(HEIGHT));
+
+        float pixelR = radius / z * ( float(WIDTH) / (2.0 * cam.tanHalfFov * cam.aspect) );
+
+        if(length(vec2(pix) - vec2(center)) < pixelR) {
+            color = vec4(col, 1.0);
+        }
     }
 
     imageStore(outImage, pix, color);
