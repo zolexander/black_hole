@@ -25,7 +25,7 @@ double lastPrintTime = 0.0;
 int    framesCount   = 0;
 double c = 299792458.0;
 double G = 6.67430e-11;
-bool useGeodesics = true;
+struct Ray;
 
 struct Camera {
     // Center the camera orbit on the black hole at (0, 0, 0)
@@ -90,6 +90,13 @@ struct Camera {
                 panning = false;
             }
         }
+        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+            if (action == GLFW_PRESS) {
+                panning = true;
+            } else if (action == GLFW_RELEASE) {
+                panning = false;
+            }
+        }
     }
     void processScroll(double xoffset, double yoffset) {
         radius -= yoffset * zoomSpeed;
@@ -99,8 +106,6 @@ struct Camera {
 };
 Camera camera;
 
-struct Ray;
-void rk4Step(Ray& ray, double dλ, double rs);
 struct BlackHole {
     vec3 position;
     double mass;
@@ -117,43 +122,14 @@ struct BlackHole {
     }
 };
 BlackHole SagA(vec3(0.0f, 0.0f, 0.0f), 8.54e36); // Sagittarius A black hole
-struct Ray{
-    // -- cartesian coords -- //
-    double x;   double y; double z;
-    // -- polar coords -- //
-    double r;   double phi; double theta;
-    double dr;  double dphi; double dtheta;
-    double E, L;             // conserved quantities
-
-    Ray(vec3 pos, vec3 dir) : x(pos.x), y(pos.y), z(pos.z) {
-        // Step 1: get spherical coords (r, theta, phi)
-        r = sqrt(x*x + y*y + z*z);
-        theta = acos(z / r);
-        phi = atan2(y, x);
-
-        // Step 2: seed velocities (dr, dtheta, dphi)
-        // Convert direction to spherical basis
-        double dx = dir.x, dy = dir.y, dz = dir.z;
-        dr     = sin(theta)*cos(phi)*dx + sin(theta)*sin(phi)*dy + cos(theta)*dz;
-        dtheta = cos(theta)*cos(phi)*dx + cos(theta)*sin(phi)*dy - sin(theta)*dz;
-        dtheta /= r;
-        dphi   = -sin(phi)*dx + cos(phi)*dy;
-        dphi  /= (r * sin(theta));
-
-        // Step 3: store conserved quantities
-        L = r * r * sin(theta) * dphi;
-        double f = 1.0 - SagA.r_s / r;
-        double dt_dλ = sqrt((dr*dr)/f + r*r*dtheta*dtheta + r*r*sin(theta)*sin(theta)*dphi*dphi);
-        E = f * dt_dλ;
-    }
-    void step(double dλ, double rs) {
-        if (r <= rs) return;
-        rk4Step(*this, dλ, rs);
-        // convert back to cartesian
-        this->x = r * sin(theta) * cos(phi);
-        this->y = r * sin(theta) * sin(phi);
-        this->z = r * cos(theta);
-    }
+struct ObjectData {
+    vec4 posRadius; // xyz = position, w = radius
+    vec4 color;     // rgb = color, a = unused
+};
+vector<ObjectData> objects = {
+    { vec4(2e11f, 0.0f, 0.0f, 1e11f),vec4(1,0,0,1) },
+    { vec4(0.0f, 2e11f, 0.0f, 1e11f),vec4(1,0,0,1) },
+    //{ vec4(6e10f, 0.0f, 0.0f, 5e10f), vec4(0,1,0,1) }
 };
 
 struct Engine {
@@ -163,8 +139,10 @@ struct Engine {
     GLuint texture;
     GLuint shaderProgram;
     GLuint computeProgram = 0;
+    // -- UBOs -- //
     GLuint cameraUBO = 0;
     GLuint diskUBO = 0;
+    GLuint objectsUBO = 0;
     int WIDTH = 800;  // Window width
     int HEIGHT = 600; // Window height
     int COMPUTE_WIDTH = 400;   // Compute resolution width
@@ -304,15 +282,9 @@ struct Engine {
 
         uploadCameraUBO(cam);
 
-        // disk
-        float r1 = SagA.r_s * 2.2f;    // inner radius just outside the event horizon
-        float r2 = SagA.r_s * 4.2f;   // outer radius of the disk
-        float q  = 2.0f;               // emissivity falloff (brightness ∝ 1/r^q)
-        float padding = 0.0f;          // padding for std140 alignment
-        float diskData[4] = { r1, r2, q, padding };
-
-        glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(diskData), diskData);
+        uploadDiskUBO();
+        // object
+        uploadObjectsUBO(objects);
 
         // 3) bind your render‐texture as image unit 0
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
@@ -333,7 +305,6 @@ struct Engine {
             vec3 forward; float _pad3;
             float tanHalfFov;
             float aspect;
-            int useGeodesics;
             int _pad4;
         } data;
         vec3 fwd = normalize(cam.target - cam.position());
@@ -347,11 +318,39 @@ struct Engine {
         data.forward = fwd;
         data.tanHalfFov = tan(radians(60.0f * 0.5f));
         data.aspect = float(WIDTH) / float(HEIGHT);
-        data.useGeodesics = useGeodesics;
 
         glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UBOData), &data);
     }
+    void uploadObjectsUBO(const vector<ObjectData>& objects) {
+        const int MAX_OBJECTS = 16; // Change as needed, must match GLSL
+        struct ObjectsUBO {
+            int numObjects;
+            float pad[3]; // std140 alignment
+            ObjectData data[MAX_OBJECTS];
+        } uboData = {};
+        uboData.numObjects = std::min(int(objects.size()), MAX_OBJECTS);
+        for (int i = 0; i < uboData.numObjects; ++i)
+            uboData.data[i] = objects[i];
+
+        if (objectsUBO == 0)
+            glGenBuffers(1, &objectsUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, objectsUBO);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(ObjectsUBO), &uboData, GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 3, objectsUBO); // binding = 3 matches shader
+    }
+    void uploadDiskUBO() {
+        // disk
+        float r1 = SagA.r_s * 2.2f;    // inner radius just outside the event horizon
+        float r2 = SagA.r_s * 4.2f;   // outer radius of the disk
+        float num = 2.0;               // number of rays
+        float thickness = 1e9f;          // padding for std140 alignment
+        float diskData[4] = { r1, r2, num, thickness };
+
+        glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(diskData), diskData);
+    }
+    
     vector<GLuint> QuadVAO(){
         float quadVertices[] = {
             // positions   // texCoords
@@ -397,14 +396,6 @@ struct Engine {
         glfwSwapBuffers(window);
         glfwPollEvents();
     };
-    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-        if (action == GLFW_PRESS) {
-            if (key == GLFW_KEY_G) {
-                useGeodesics = !useGeodesics;
-                cout << "Geodesics: " << (useGeodesics ? "ON\n" : "OFF\n");
-            }
-        }
-    }
 };
 Engine engine;
 void setupCameraCallbacks(GLFWwindow* window) {
@@ -424,9 +415,6 @@ void setupCameraCallbacks(GLFWwindow* window) {
         Camera* cam = (Camera*)glfwGetWindowUserPointer(win);
         cam->processScroll(xoffset, yoffset);
     });
-    glfwSetKeyCallback(window, [](GLFWwindow* win, int key, int sc, int action, int mods){
-        Engine::keyCallback(win, key, sc, action, mods);
-    });
 }
 
 // -- MAIN -- //
@@ -442,17 +430,17 @@ int main() {
         engine.renderScene();
 
         // 2) FPS counting
-        framesCount++;
-        auto t1 = Clock::now();
-        double now = chrono::duration<double>(t1.time_since_epoch()).count();
-        if (now - lastPrintTime >= 1.0) {
-            cout << "FPS: " << framesCount / (now - lastPrintTime) << "\n";
-            cout << "Camera Position: " << camera.position().x << ", "
-                 << camera.position().y << ", " << camera.position().z<<endl;
-            cout << "radius: " << camera.radius << "\n";
-            framesCount   = 0;
-            lastPrintTime = now;
-        }
+        // framesCount++;
+        // auto t1 = Clock::now();
+        // double now = chrono::duration<double>(t1.time_since_epoch()).count();
+        // if (now - lastPrintTime >= 1.0) {
+        //     cout << "FPS: " << framesCount / (now - lastPrintTime) << "\n";
+        //     cout << "Camera Position: " << camera.position().x << ", "
+        //          << camera.position().y << ", " << camera.position().z<<endl;
+        //     cout << "radius: " << camera.radius << "\n";
+        //     framesCount   = 0;
+        //     lastPrintTime = now;
+        // }
     }
 
     glfwDestroyWindow(engine.window);
