@@ -305,6 +305,7 @@ struct Engine {
             vec3 forward; float _pad3;
             float tanHalfFov;
             float aspect;
+            bool moving;
             int _pad4;
         } data;
         vec3 fwd = normalize(cam.target - cam.position());
@@ -318,26 +319,29 @@ struct Engine {
         data.forward = fwd;
         data.tanHalfFov = tan(radians(60.0f * 0.5f));
         data.aspect = float(WIDTH) / float(HEIGHT);
+        data.moving = cam.dragging || cam.panning;
 
         glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UBOData), &data);
     }
-    void uploadObjectsUBO(const vector<ObjectData>& objects) {
-        const int MAX_OBJECTS = 16; // Change as needed, must match GLSL
-        struct ObjectsUBO {
+    void uploadObjectsUBO(const vector<ObjectData>& objs) {
+        struct UBOData {
             int numObjects;
-            float pad[3]; // std140 alignment
-            ObjectData data[MAX_OBJECTS];
-        } uboData = {};
-        uboData.numObjects = std::min(int(objects.size()), MAX_OBJECTS);
-        for (int i = 0; i < uboData.numObjects; ++i)
-            uboData.data[i] = objects[i];
+            vec4 posRadius[16];
+            vec4 color[16];
+        } data;
 
-        if (objectsUBO == 0)
-            glGenBuffers(1, &objectsUBO);
+        size_t count = std::min(objs.size(), size_t(16));
+        data.numObjects = static_cast<int>(count);
+
+        for (size_t i = 0; i < count; ++i) {
+            data.posRadius[i] = objs[i].posRadius;
+            data.color[i] = objs[i].color;
+        }
+
+        // Upload
         glBindBuffer(GL_UNIFORM_BUFFER, objectsUBO);
-        glBufferData(GL_UNIFORM_BUFFER, sizeof(ObjectsUBO), &uboData, GL_DYNAMIC_DRAW);
-        glBindBufferBase(GL_UNIFORM_BUFFER, 3, objectsUBO); // binding = 3 matches shader
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
     }
     void uploadDiskUBO() {
         // disk
@@ -426,6 +430,13 @@ int main() {
     lastPrintTime = chrono::duration<double>(t0.time_since_epoch()).count();
 
     while (!glfwWindowShouldClose(engine.window)) {
+        if(camera.dragging || camera.panning) {
+            engine.COMPUTE_WIDTH = 200; 
+            engine.COMPUTE_HEIGHT = 150;
+        } else {
+            engine.COMPUTE_WIDTH = 400; 
+            engine.COMPUTE_HEIGHT = 300;
+        }
         engine.dispatchCompute(camera);
         engine.renderScene();
 
