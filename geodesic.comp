@@ -9,6 +9,7 @@ layout(std140, binding = 1) uniform Camera {
     vec3 camForward; float _pad3;
     float tanHalfFov;
     float aspect;
+    bool moving;
     int   _pad4;
 } cam;
 
@@ -21,7 +22,6 @@ layout(std140, binding = 2) uniform Disk {
 
 layout(std140, binding = 3) uniform Objects {
     int numObjects;
-    float _pad0, _pad1, _pad2;
     vec4 objPosRadius[16];
     vec4 objColor[16];
 };
@@ -30,8 +30,8 @@ const float SagA_rs = 1.269e10;
 const float D_LAMBDA = 1e7;
 const double ESCAPE_R = 1e30;
 
-const int WIDTH  = 400;
-const int HEIGHT = 300;
+int WIDTH  = 400;
+int HEIGHT = 300;
 
 struct Ray {
     float x, y, z, r, theta, phi;
@@ -121,6 +121,13 @@ bool crossesEquatorialPlane(vec3 oldPos, vec3 newPos) {
 
 
 void main() {
+    if (cam.moving) {
+        WIDTH  = 200;
+        HEIGHT = 150;
+    } else {
+        WIDTH  = 400;
+        HEIGHT = 300;
+    }
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     if (pix.x >= WIDTH || pix.y >= HEIGHT) return;
 
@@ -139,13 +146,21 @@ void main() {
     bool hitDisk      = false;
     bool hitObject    = false;
 
+    int steps;
+    if (cam.moving) {
+        steps=40000;
+    } else {
+        steps=40000;
+    };
+
     // Step Loop
-    for (int i = 0; i < 20000; ++i) {
+    for (int i = 0; i < steps; ++i) {
         if (intercept(ray, SagA_rs)) {
             hitBlackHole = true;
             break;
         }
         rk4Step(ray, D_LAMBDA);
+
         lambda += D_LAMBDA;
         vec3 newPos = vec3(ray.x, ray.y, ray.z);
 
@@ -154,6 +169,7 @@ void main() {
             hitDisk = true;
             break;
         }
+        
         if (interceptObject(ray)) {
             hitObject = true;
             break;
