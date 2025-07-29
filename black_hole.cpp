@@ -127,12 +127,13 @@ struct ObjectData {
     vec4 color;     // rgb = color, a = unused
 };
 vector<ObjectData> objects = {
-    { vec4(2e11f, 0.0f, 0.0f, 1e11f),vec4(1,0,0,1) },
-    { vec4(0.0f, 2e11f, 0.0f, 1e11f),vec4(1,0,0,1) },
+    { vec4(4e11f, 0.0f, 0.0f, 4e10f),vec4(1,0,0,1) },
+    { vec4(0.0f, 0.0f, 4e11f, 4e10f),vec4(1,0,0,1) },
     //{ vec4(6e10f, 0.0f, 0.0f, 5e10f), vec4(0,1,0,1) }
 };
 
 struct Engine {
+    GLuint gridShaderProgram;
     // -- Quad & Texture render -- //
     GLFWwindow* window;
     GLuint quadVAO;
@@ -143,6 +144,12 @@ struct Engine {
     GLuint cameraUBO = 0;
     GLuint diskUBO = 0;
     GLuint objectsUBO = 0;
+    // -- grid mess vars -- //
+    GLuint gridVAO = 0;
+    GLuint gridVBO = 0;
+    GLuint gridEBO = 0;
+    int gridIndexCount = 0;
+
     int WIDTH = 800;  // Window width
     int HEIGHT = 600; // Window height
     int COMPUTE_WIDTH = 400;   // Compute resolution width
@@ -176,6 +183,7 @@ struct Engine {
         }
         cout << "OpenGL " << glGetString(GL_VERSION) << "\n";
         this->shaderProgram = CreateShaderProgram();
+        gridShaderProgram = CreateShaderProgram("grid.vert", "grid.frag");
 
         computeProgram = CreateComputeProgram("geodesic.comp");
         glGenBuffers(1, &cameraUBO);
@@ -188,9 +196,103 @@ struct Engine {
         glBufferData(GL_UNIFORM_BUFFER, sizeof(float) * 4, nullptr, GL_DYNAMIC_DRAW); // 3 values + 1 padding
         glBindBufferBase(GL_UNIFORM_BUFFER, 2, diskUBO); // binding = 2 matches compute shader
 
+        glGenBuffers(1, &objectsUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, objectsUBO);
+        // allocate space for 16 objects: 
+        // sizeof(int) + padding + 16×(vec4 posRadius + vec4 color)
+        GLsizeiptr objUBOSize = sizeof(int) + 3 * sizeof(float)
+            + 16 * (sizeof(vec4) + sizeof(vec4));
+        glBufferData(GL_UNIFORM_BUFFER, objUBOSize, nullptr, GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 3, objectsUBO);  // binding = 3 matches shader
+
         auto result = QuadVAO();
         this->quadVAO = result[0];
         this->texture = result[1];
+    }
+    void generateGrid(const std::vector<ObjectData>& objects) {
+        const int gridSize = 100;
+        const float spacing = 2e10f;  // tweak this
+
+        std::vector<vec3> vertices;
+        std::vector<GLuint> indices;
+
+        for (int z = 0; z <= gridSize; ++z) {
+            for (int x = 0; x <= gridSize; ++x) {
+                float worldX = (x - gridSize / 2) * spacing;
+                float worldZ = (z - gridSize / 2) * spacing;
+
+                float y = 0.0f;
+
+                // 🔵 displace grid based on nearby objects
+                for (const auto& obj : objects) {
+                    vec3 objPos = vec3(obj.posRadius);
+                    float radius = obj.posRadius.w;
+                    float dist2 = pow(worldX - objPos.x, 2) + pow(worldZ - objPos.z, 2);
+                    y -= radius * 0.5f / (1.0f + dist2 * 1e-22f);  // tweak shape
+                }
+
+                vertices.emplace_back(worldX, y, worldZ);
+            }
+        }
+
+        // 🧩 Add indices for GL_LINE rendering
+        for (int z = 0; z < gridSize; ++z) {
+            for (int x = 0; x < gridSize; ++x) {
+                int i = z * (gridSize + 1) + x;
+                indices.push_back(i);
+                indices.push_back(i + 1);
+
+                indices.push_back(i);
+                indices.push_back(i + gridSize + 1);
+            }
+        }
+
+        // 🔌 Upload to GPU
+        if (gridVAO == 0) glGenVertexArrays(1, &gridVAO);
+        if (gridVBO == 0) glGenBuffers(1, &gridVBO);
+        if (gridEBO == 0) glGenBuffers(1, &gridEBO);
+
+        glBindVertexArray(gridVAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(vec3), vertices.data(), GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gridEBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0); // location = 0
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vec3), (void*)0);
+
+        gridIndexCount = indices.size();
+
+        glBindVertexArray(0);
+    }
+    void drawGrid(const mat4& viewProj) {
+        glUseProgram(gridShaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "viewProj"),
+                        1, GL_FALSE, glm::value_ptr(viewProj));
+        glBindVertexArray(gridVAO);
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glDrawElements(GL_LINES, gridIndexCount, GL_UNSIGNED_INT, 0);
+
+        glBindVertexArray(0);
+        glEnable(GL_DEPTH_TEST);
+    }
+    void drawFullScreenQuad() {
+        glUseProgram(shaderProgram); // fragment + vertex shader
+        glBindVertexArray(quadVAO);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glUniform1i(glGetUniformLocation(shaderProgram, "screenTexture"), 0);
+
+        glDisable(GL_DEPTH_TEST);  // draw as background
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);  // 2 triangles
+        glEnable(GL_DEPTH_TEST);
     }
     GLuint CreateShaderProgram(){
         const char* vertexShaderSource = R"(
@@ -232,6 +334,59 @@ struct Engine {
 
         return shaderProgram;
     };
+    GLuint CreateShaderProgram(const char* vertPath, const char* fragPath) {
+        auto loadShader = [](const char* path, GLenum type) -> GLuint {
+            std::ifstream in(path);
+            if (!in.is_open()) {
+                std::cerr << "Failed to open shader: " << path << "\n";
+                exit(EXIT_FAILURE);
+            }
+            std::stringstream ss;
+            ss << in.rdbuf();
+            std::string srcStr = ss.str();
+            const char* src = srcStr.c_str();
+
+            GLuint shader = glCreateShader(type);
+            glShaderSource(shader, 1, &src, nullptr);
+            glCompileShader(shader);
+
+            GLint success;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+            if (!success) {
+                GLint logLen;
+                glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
+                std::vector<char> log(logLen);
+                glGetShaderInfoLog(shader, logLen, nullptr, log.data());
+                std::cerr << "Shader compile error (" << path << "):\n" << log.data() << "\n";
+                exit(EXIT_FAILURE);
+            }
+            return shader;
+        };
+
+        GLuint vertShader = loadShader(vertPath, GL_VERTEX_SHADER);
+        GLuint fragShader = loadShader(fragPath, GL_FRAGMENT_SHADER);
+
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vertShader);
+        glAttachShader(program, fragShader);
+        glLinkProgram(program);
+
+        GLint linkSuccess;
+        glGetProgramiv(program, GL_LINK_STATUS, &linkSuccess);
+        if (!linkSuccess) {
+            GLint logLen;
+            glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLen);
+            std::vector<char> log(logLen);
+            glGetProgramInfoLog(program, logLen, nullptr, log.data());
+            std::cerr << "Shader link error:\n" << log.data() << "\n";
+            exit(EXIT_FAILURE);
+        }
+
+        glDeleteShader(vertShader);
+        glDeleteShader(fragShader);
+
+        return program;
+    }
     GLuint CreateComputeProgram(const char* path) {
         // 1) read GLSL source
         std::ifstream in(path);
@@ -326,9 +481,10 @@ struct Engine {
     }
     void uploadObjectsUBO(const vector<ObjectData>& objs) {
         struct UBOData {
-            int numObjects;
-            vec4 posRadius[16];
-            vec4 color[16];
+            int   numObjects;
+            float _pad0, _pad1, _pad2;        // <-- pad out to 16 bytes
+            vec4  posRadius[16];
+            vec4  color[16];
         } data;
 
         size_t count = std::min(objs.size(), size_t(16));
@@ -385,7 +541,16 @@ struct Engine {
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, COMPUTE_WIDTH, COMPUTE_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D,
+                    0,             // mip
+                    GL_RGBA8,      // internal format
+                    COMPUTE_WIDTH,
+                    COMPUTE_HEIGHT,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    nullptr);
         vector<GLuint> VAOtexture = {VAO, texture};
         return VAOtexture;
     }
@@ -430,28 +595,34 @@ int main() {
     lastPrintTime = chrono::duration<double>(t0.time_since_epoch()).count();
 
     while (!glfwWindowShouldClose(engine.window)) {
-        if(camera.dragging || camera.panning) {
-            engine.COMPUTE_WIDTH = 200; 
-            engine.COMPUTE_HEIGHT = 150;
-        } else {
-            engine.COMPUTE_WIDTH = 400; 
-            engine.COMPUTE_HEIGHT = 300;
-        }
-        engine.dispatchCompute(camera);
-        engine.renderScene();
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // optional, but good practice
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // 2) FPS counting
-        // framesCount++;
-        // auto t1 = Clock::now();
-        // double now = chrono::duration<double>(t1.time_since_epoch()).count();
-        // if (now - lastPrintTime >= 1.0) {
-        //     cout << "FPS: " << framesCount / (now - lastPrintTime) << "\n";
-        //     cout << "Camera Position: " << camera.position().x << ", "
-        //          << camera.position().y << ", " << camera.position().z<<endl;
-        //     cout << "radius: " << camera.radius << "\n";
-        //     framesCount   = 0;
-        //     lastPrintTime = now;
-        // }
+        // 1) adjust compute‐texture size if camera is dragging
+        // glBindTexture(GL_TEXTURE_2D, engine.texture);
+        // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+        //             engine.COMPUTE_WIDTH,
+        //             engine.COMPUTE_HEIGHT,
+        //             0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+        // 2) rebuild grid mesh on CPU
+        engine.generateGrid(objects);
+
+        // 5) overlay the bent grid
+        mat4 view = lookAt(camera.position(), camera.target, vec3(0,1,0));
+        mat4 proj = perspective(radians(60.0f), float(engine.COMPUTE_WIDTH)/engine.COMPUTE_HEIGHT, 1e9f, 1e14f);
+        mat4 viewProj = proj * view;
+        engine.drawGrid(viewProj);
+
+        // 3) update UBOs & run the ray‑tracer
+        engine.dispatchCompute(camera);
+
+        // 4) draw the ray–traced image
+        engine.drawFullScreenQuad();
+
+        // 6) present to screen
+        glfwSwapBuffers(engine.window);
+        glfwPollEvents();
     }
 
     glfwDestroyWindow(engine.window);
