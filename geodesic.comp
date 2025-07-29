@@ -86,30 +86,36 @@ void rk4Step(inout Ray ray, float dL) {
     vec3 k1a, k1b, k2a, k2b, k3a, k3b, k4a, k4b;
     geodesicRHS(ray, k1a, k1b);
 
-    Ray r2;
-    r2.r = ray.r + dL*0.5*k1a.x; r2.theta = ray.theta + dL*0.5*k1a.y; r2.phi = ray.phi + dL*0.5*k1a.z;
-    r2.dr = ray.dr + dL*0.5*k1b.x; r2.dtheta = ray.dtheta + dL*0.5*k1b.y; r2.dphi = ray.dphi + dL*0.5*k1b.z;
-    r2.E = ray.E;
-    geodesicRHS(r2, k2a, k2b);
-
-    Ray r3;
-    r3.r = ray.r + dL*0.5*k2a.x; r3.theta = ray.theta + dL*0.5*k2a.y; r3.phi = ray.phi + dL*0.5*k2a.z;
-    r3.dr = ray.dr + dL*0.5*k2b.x; r3.dtheta = ray.dtheta + dL*0.5*k2b.y; r3.dphi = ray.dphi + dL*0.5*k2b.z;
-    r3.E = ray.E;
-    geodesicRHS(r3, k3a, k3b);
-
-    Ray r4;
-    r4.r = ray.r + dL*k3a.x; r4.theta = ray.theta + dL*k3a.y; r4.phi = ray.phi + dL*k3a.z;
-    r4.dr = ray.dr + dL*k3b.x; r4.dtheta = ray.dtheta + dL*k3b.y; r4.dphi = ray.dphi + dL*k3b.z;
-    r4.E = ray.E;
-    geodesicRHS(r4, k4a, k4b);
-
-    ray.r      += dL/6.0 * (k1a.x + 2*k2a.x + 2*k3a.x + k4a.x);
-    ray.theta  += dL/6.0 * (k1a.y + 2*k2a.y + 2*k3a.y + k4a.y);
-    ray.phi    += dL/6.0 * (k1a.z + 2*k2a.z + 2*k3a.z + k4a.z);
-    ray.dr     += dL/6.0 * (k1b.x + 2*k2b.x + 2*k3b.x + k4b.x);
-    ray.dtheta += dL/6.0 * (k1b.y + 2*k2b.y + 2*k3b.y + k4b.y);
-    ray.dphi   += dL/6.0 * (k1b.z + 2*k2b.z + 2*k3b.z + k4b.z);
+    //Ray r2;
+    //r2.r = ray.r + dL*0.5*k1a.x; r2.theta = ray.theta + dL*0.5*k1a.y; r2.phi = ray.phi + dL*0.5*k1a.z;
+    //r2.dr = ray.dr + dL*0.5*k1b.x; r2.dtheta = ray.dtheta + dL*0.5*k1b.y; r2.dphi = ray.dphi + dL*0.5*k1b.z;
+    //r2.E = ray.E;
+    //geodesicRHS(r2, k2a, k2b);
+//
+    //Ray r3;
+    //r3.r = ray.r + dL*0.5*k2a.x; r3.theta = ray.theta + dL*0.5*k2a.y; r3.phi = ray.phi + dL*0.5*k2a.z;
+    //r3.dr = ray.dr + dL*0.5*k2b.x; r3.dtheta = ray.dtheta + dL*0.5*k2b.y; r3.dphi = ray.dphi + dL*0.5*k2b.z;
+    //r3.E = ray.E;
+    //geodesicRHS(r3, k3a, k3b);
+//
+    //Ray r4;
+    //r4.r = ray.r + dL*k3a.x; r4.theta = ray.theta + dL*k3a.y; r4.phi = ray.phi + dL*k3a.z;
+    //r4.dr = ray.dr + dL*k3b.x; r4.dtheta = ray.dtheta + dL*k3b.y; r4.dphi = ray.dphi + dL*k3b.z;
+    //r4.E = ray.E;
+    //geodesicRHS(r4, k4a, k4b);
+//
+    //ray.r      += dL/6.0 * (k1a.x + 2*k2a.x + 2*k3a.x + k4a.x);
+    //ray.theta  += dL/6.0 * (k1a.y + 2*k2a.y + 2*k3a.y + k4a.y);
+    //ray.phi    += dL/6.0 * (k1a.z + 2*k2a.z + 2*k3a.z + k4a.z);
+    //ray.dr     += dL/6.0 * (k1b.x + 2*k2b.x + 2*k3b.x + k4b.x);
+    //ray.dtheta += dL/6.0 * (k1b.y + 2*k2b.y + 2*k3b.y + k4b.y);
+    //ray.dphi   += dL/6.0 * (k1b.z + 2*k2b.z + 2*k3b.z + k4b.z);
+    ray.r      += dL * k1a.x;
+    ray.theta  += dL * k1a.y;
+    ray.phi    += dL * k1a.z;
+    ray.dr     += dL * k1b.x;
+    ray.dtheta += dL * k1b.y;
+    ray.dphi   += dL * k1b.z;
 
     ray.x = ray.r * sin(ray.theta) * cos(ray.phi);
     ray.y = ray.r * sin(ray.theta) * sin(ray.phi);
@@ -121,20 +127,20 @@ bool crossesEquatorialPlane(vec3 oldPos, vec3 newPos) {
 
 
 void main() {
-    if (cam.moving) {
-        WIDTH  = 200;
-        HEIGHT = 150;
-    } else {
-        WIDTH  = 400;
-        HEIGHT = 300;
-    }
+    //if (cam.moving) {
+    //    WIDTH  = 200;
+    //    HEIGHT = 150;
+    //} else {
+    //    WIDTH  = 800;
+    //    HEIGHT = 600;
+    //}
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     if (pix.x >= WIDTH || pix.y >= HEIGHT) return;
 
     // -- Init Ray -- //
     float u = (2.0 * (pix.x + 0.5) / WIDTH - 1.0) * cam.aspect * cam.tanHalfFov;
     float v = (1.0 - 2.0 * (pix.y + 0.5) / HEIGHT) * cam.tanHalfFov;
-    vec3 dir = normalize(u * cam.camRight + v * cam.camUp + cam.camForward);
+    vec3 dir = normalize(u * cam.camRight - v * cam.camUp + cam.camForward);
     Ray ray = initRay(cam.camPos, dir);
 
     vec4 color = vec4(0.0);
@@ -148,9 +154,9 @@ void main() {
 
     int steps;
     if (cam.moving) {
-        steps=40000;
+        steps=20000;
     } else {
-        steps=40000;
+        steps=80000;
     };
 
     // Step Loop
