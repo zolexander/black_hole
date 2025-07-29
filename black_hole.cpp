@@ -125,10 +125,12 @@ BlackHole SagA(vec3(0.0f, 0.0f, 0.0f), 8.54e36); // Sagittarius A black hole
 struct ObjectData {
     vec4 posRadius; // xyz = position, w = radius
     vec4 color;     // rgb = color, a = unused
+    float  mass;
 };
 vector<ObjectData> objects = {
-    { vec4(4e11f, 0.0f, 0.0f, 4e10f),vec4(1,0,0,1) },
-    { vec4(0.0f, 0.0f, 4e11f, 4e10f),vec4(1,0,0,1) },
+    { vec4(4e11f, 0.0f, 0.0f, 4e10f)   ,vec4(1,1,0,1), 1.98892e30 },
+    { vec4(0.0f, 0.0f, 4e11f, 4e10f)   ,vec4(1,0,0,1), 1.98892e30 },
+    { vec4(0.0f, 0.0f, 0.0f, SagA.r_s) ,vec4(0,0,0,1), SagA.mass  },
     //{ vec4(6e10f, 0.0f, 0.0f, 5e10f), vec4(0,1,0,1) }
 };
 
@@ -201,7 +203,8 @@ struct Engine {
         // allocate space for 16 objects: 
         // sizeof(int) + padding + 16×(vec4 posRadius + vec4 color)
         GLsizeiptr objUBOSize = sizeof(int) + 3 * sizeof(float)
-            + 16 * (sizeof(vec4) + sizeof(vec4));
+            + 16 * (sizeof(vec4) + sizeof(vec4))
+            + 16 * sizeof(float); // 16 floats for mass
         glBufferData(GL_UNIFORM_BUFFER, objUBOSize, nullptr, GL_DYNAMIC_DRAW);
         glBindBufferBase(GL_UNIFORM_BUFFER, 3, objectsUBO);  // binding = 3 matches shader
 
@@ -209,12 +212,12 @@ struct Engine {
         this->quadVAO = result[0];
         this->texture = result[1];
     }
-    void generateGrid(const std::vector<ObjectData>& objects) {
+    void generateGrid(const vector<ObjectData>& objects) {
         const int gridSize = 100;
         const float spacing = 2e10f;  // tweak this
 
-        std::vector<vec3> vertices;
-        std::vector<GLuint> indices;
+        vector<vec3> vertices;
+        vector<GLuint> indices;
 
         for (int z = 0; z <= gridSize; ++z) {
             for (int x = 0; x <= gridSize; ++x) {
@@ -223,12 +226,25 @@ struct Engine {
 
                 float y = 0.0f;
 
-                // 🔵 displace grid based on nearby objects
+                // ✅ Warp grid using Schwarzschild geometry
                 for (const auto& obj : objects) {
                     vec3 objPos = vec3(obj.posRadius);
-                    float radius = obj.posRadius.w;
-                    float dist2 = pow(worldX - objPos.x, 2) + pow(worldZ - objPos.z, 2);
-                    y -= radius * 0.5f / (1.0f + dist2 * 1e-22f);  // tweak shape
+                    double mass = obj.mass;
+                    double radius = obj.posRadius.w;
+
+                    double r_s = 2.0 * G * mass / (c * c);
+                    double dx = worldX - objPos.x;
+                    double dz = worldZ - objPos.z;
+                    double dist = sqrt(dx * dx + dz * dz);
+
+                    // prevent sqrt of negative or divide-by-zero (inside or at the black hole center)
+                    if (dist > r_s) {
+                        double deltaY = 2.0 * sqrt(r_s * (dist - r_s));
+                        y += static_cast<float>(deltaY) - 3e10f;
+                    } else {
+                        // 🔴 For points inside or at r_s: make it dip down sharply
+                        y += 2.0f * static_cast<float>(sqrt(r_s * r_s)) - 3e10f;  // or add a deep pit
+                    }
                 }
 
                 vertices.emplace_back(worldX, y, worldZ);
@@ -485,6 +501,7 @@ struct Engine {
             float _pad0, _pad1, _pad2;        // <-- pad out to 16 bytes
             vec4  posRadius[16];
             vec4  color[16];
+            float  mass[16]; 
         } data;
 
         size_t count = std::min(objs.size(), size_t(16));
@@ -493,6 +510,7 @@ struct Engine {
         for (size_t i = 0; i < count; ++i) {
             data.posRadius[i] = objs[i].posRadius;
             data.color[i] = objs[i].color;
+            data.mass[i] = objs[i].mass;
         }
 
         // Upload
