@@ -26,6 +26,7 @@ int    framesCount   = 0;
 double c = 299792458.0;
 double G = 6.67430e-11;
 struct Ray;
+bool Gravity = false;
 
 struct Camera {
     // Center the camera orbit on the black hole at (0, 0, 0)
@@ -42,6 +43,7 @@ struct Camera {
 
     bool dragging = false;
     bool panning = false;
+    bool moving = false; // For compute shader optimization
     double lastX = 0.0, lastY = 0.0;
 
     // Calculate camera position in world space
@@ -57,6 +59,11 @@ struct Camera {
     void update() {
         // Always keep target at black hole center
         target = vec3(0.0f, 0.0f, 0.0f);
+        if(dragging | panning) {
+            moving = true;
+        } else {
+            moving = false;
+        }
     }
 
     void processMouseMove(double x, double y) {
@@ -92,9 +99,9 @@ struct Camera {
         }
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
             if (action == GLFW_PRESS) {
-                panning = true;
+                Gravity = true;
             } else if (action == GLFW_RELEASE) {
-                panning = false;
+                Gravity = false;
             }
         }
     }
@@ -102,6 +109,12 @@ struct Camera {
         radius -= yoffset * zoomSpeed;
         radius = clamp(radius, minRadius, maxRadius);
         update();
+    }
+    void processKey(int key, int scancode, int action, int mods) {
+        if (action == GLFW_PRESS && key == GLFW_KEY_G) {
+            Gravity = !Gravity;
+            cout << "[INFO] Gravity turned " << (Gravity ? "ON" : "OFF") << endl;
+        }
     }
 };
 Camera camera;
@@ -126,11 +139,12 @@ struct ObjectData {
     vec4 posRadius; // xyz = position, w = radius
     vec4 color;     // rgb = color, a = unused
     float  mass;
+    vec3 velocity = vec3(0.0f, 0.0f, 0.0f); // Initial velocity
 };
 vector<ObjectData> objects = {
-    { vec4(4e11f, 0.0f, 0.0f, 4e10f)   ,vec4(1,1,0,1), 1.98892e30 },
-    { vec4(0.0f, 0.0f, 4e11f, 4e10f)   ,vec4(1,0,0,1), 1.98892e30 },
-    { vec4(0.0f, 0.0f, 0.0f, SagA.r_s) ,vec4(0,0,0,1), SagA.mass  },
+    { vec4(4e11f, 0.0f, 0.0f, 4e10f)   , vec4(1,1,0,1), 1.98892e30 },
+    { vec4(0.0f, 0.0f, 4e11f, 4e10f)   , vec4(1,0,0,1), 1.98892e30 },
+    { vec4(0.0f, 0.0f, 0.0f, SagA.r_s) , vec4(0,0,0,1), SagA.mass  },
     //{ vec4(6e10f, 0.0f, 0.0f, 5e10f), vec4(0,1,0,1) }
 };
 
@@ -154,8 +168,8 @@ struct Engine {
 
     int WIDTH = 800;  // Window width
     int HEIGHT = 600; // Window height
-    int COMPUTE_WIDTH = 400;   // Compute resolution width
-    int COMPUTE_HEIGHT = 300;  // Compute resolution height
+    int COMPUTE_WIDTH  = 200;   // Compute resolution width
+    int COMPUTE_HEIGHT = 150;  // Compute resolution height
     float width = 100000000000.0f; // Width of the viewport in meters
     float height = 75000000000.0f; // Height of the viewport in meters
     
@@ -213,8 +227,8 @@ struct Engine {
         this->texture = result[1];
     }
     void generateGrid(const vector<ObjectData>& objects) {
-        const int gridSize = 100;
-        const float spacing = 2e10f;  // tweak this
+        const int gridSize = 25;
+        const float spacing = 1e10f;  // tweak this
 
         vector<vec3> vertices;
         vector<GLuint> indices;
@@ -448,24 +462,36 @@ struct Engine {
         return prog;
     }
     void dispatchCompute(const Camera& cam) {
-        // 1) bind your compute pipeline
+        // determine target compute‐res
+        int cw = cam.moving ? COMPUTE_WIDTH  : 200;
+        int ch = cam.moving ? COMPUTE_HEIGHT : 150;
+
+        // 1) reallocate the texture if needed
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D,
+                    0,                // mip
+                    GL_RGBA8,         // internal format
+                    cw,               // width
+                    ch,               // height
+                    0, GL_RGBA, 
+                    GL_UNSIGNED_BYTE, 
+                    nullptr);
+
+        // 2) bind compute program & UBOs
         glUseProgram(computeProgram);
-
         uploadCameraUBO(cam);
-
         uploadDiskUBO();
-        // object
         uploadObjectsUBO(objects);
 
-        // 3) bind your render‐texture as image unit 0
+        // 3) bind it as image unit 0
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
-        // 4) launch the compute grid (16×16 workgroups)
-        GLuint groupsX = (GLuint)std::ceil(static_cast<float>(COMPUTE_WIDTH) / 16.0f);
-        GLuint groupsY = (GLuint)std::ceil(static_cast<float>(COMPUTE_HEIGHT) / 16.0f);
+        // 4) dispatch grid
+        GLuint groupsX = (GLuint)std::ceil(cw / 16.0f);
+        GLuint groupsY = (GLuint)std::ceil(ch / 16.0f);
         glDispatchCompute(groupsX, groupsY, 1);
 
-        // 5) make sure writes are visible to the rendering pipeline
+        // 5) sync
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
     void uploadCameraUBO(const Camera& cam) {
@@ -520,7 +546,7 @@ struct Engine {
     void uploadDiskUBO() {
         // disk
         float r1 = SagA.r_s * 2.2f;    // inner radius just outside the event horizon
-        float r2 = SagA.r_s * 4.2f;   // outer radius of the disk
+        float r2 = SagA.r_s * 5.2f;   // outer radius of the disk
         float num = 2.0;               // number of rays
         float thickness = 1e9f;          // padding for std140 alignment
         float diskData[4] = { r1, r2, num, thickness };
@@ -586,7 +612,7 @@ struct Engine {
 };
 Engine engine;
 void setupCameraCallbacks(GLFWwindow* window) {
-    glfwSetWindowUserPointer(window, &camera); // So callbacks can access the camera
+    glfwSetWindowUserPointer(window, &camera);
 
     glfwSetMouseButtonCallback(window, [](GLFWwindow* win, int button, int action, int mods) {
         Camera* cam = (Camera*)glfwGetWindowUserPointer(win);
@@ -602,7 +628,13 @@ void setupCameraCallbacks(GLFWwindow* window) {
         Camera* cam = (Camera*)glfwGetWindowUserPointer(win);
         cam->processScroll(xoffset, yoffset);
     });
+
+    glfwSetKeyCallback(window, [](GLFWwindow* win, int key, int scancode, int action, int mods) {
+        Camera* cam = (Camera*)glfwGetWindowUserPointer(win);
+        cam->processKey(key, scancode, action, mods);
+    });
 }
+
 
 // -- MAIN -- //
 int main() {
@@ -612,30 +644,59 @@ int main() {
     auto t0 = Clock::now();
     lastPrintTime = chrono::duration<double>(t0.time_since_epoch()).count();
 
+    double lastTime = glfwGetTime();
+    int   renderW  = 800, renderH = 600, numSteps = 80000;
     while (!glfwWindowShouldClose(engine.window)) {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // optional, but good practice
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // 1) adjust compute‐texture size if camera is dragging
-        // glBindTexture(GL_TEXTURE_2D, engine.texture);
-        // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
-        //             engine.COMPUTE_WIDTH,
-        //             engine.COMPUTE_HEIGHT,
-        //             0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        double now   = glfwGetTime();
+        double dt    = now - lastTime;   // seconds since last frame
+        lastTime     = now;
 
+        // Gravity
+        for (auto& obj : objects) {
+            for (auto& obj2 : objects) {
+                if (&obj == &obj2) continue; // skip self-interaction
+                 float dx  = obj2.posRadius.x - obj.posRadius.x;
+                 float dy = obj2.posRadius.y - obj.posRadius.y;
+                 float dz = obj2.posRadius.z - obj.posRadius.z;
+                 float distance = sqrt(dx * dx + dy * dy + dz * dz);
+                 if (distance > 0) {
+                        vector<double> direction = {dx / distance, dy / distance, dz / distance};
+                        //distance *= 1000;
+                        double Gforce = (G * obj.mass * obj2.mass) / (distance * distance);
+
+                        double acc1 = Gforce / obj.mass;
+                        std::vector<double> acc = {direction[0] * acc1, direction[1] * acc1, direction[2] * acc1};
+                        if (Gravity) {
+                            obj.velocity.x += acc[0];
+                            obj.velocity.y += acc[1];
+                            obj.velocity.z += acc[2];
+
+                            obj.posRadius.x += obj.velocity.x;
+                            obj.posRadius.y += obj.velocity.y;
+                            obj.posRadius.z += obj.velocity.z;
+                            cout << "velocity: " <<obj.velocity.x<<", " <<obj.velocity.y<<", " <<obj.velocity.z<<endl;
+                        }
+                    }
+            }
+        }
+
+
+
+        // ---------- GRID ------------- //
         // 2) rebuild grid mesh on CPU
         engine.generateGrid(objects);
-
         // 5) overlay the bent grid
         mat4 view = lookAt(camera.position(), camera.target, vec3(0,1,0));
         mat4 proj = perspective(radians(60.0f), float(engine.COMPUTE_WIDTH)/engine.COMPUTE_HEIGHT, 1e9f, 1e14f);
         mat4 viewProj = proj * view;
         engine.drawGrid(viewProj);
 
-        // 3) update UBOs & run the ray‑tracer
+        // ---------- RUN RAYTRACER ------------- //
+        glViewport(0, 0, engine.WIDTH, engine.HEIGHT);
         engine.dispatchCompute(camera);
-
-        // 4) draw the ray–traced image
         engine.drawFullScreenQuad();
 
         // 6) present to screen
