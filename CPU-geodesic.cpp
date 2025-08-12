@@ -56,7 +56,7 @@ struct Camera {
             // Orbit
             azimuth   -= dx * orbitSpeed;
             elevation -= dy * orbitSpeed;
-            elevation = clamp(elevation, 0.01f, float(M_PI)-0.01f);
+            elevation = glm::clamp(elevation, 0.01f, float(M_PI)-0.01f);
         } else if (panning) {
             // Pan (move target in camera plane)
             vec3 forward = normalize(target - pos);
@@ -73,7 +73,7 @@ struct Camera {
             radius *= pow(zoomSpeed, -yoffset);
         else
             radius /= pow(zoomSpeed, yoffset);
-        radius = clamp(radius, minRadius, maxRadius);
+        radius = glm::clamp(radius, minRadius, maxRadius);
         updateVectors();
     }
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {

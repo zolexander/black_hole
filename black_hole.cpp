@@ -48,7 +48,7 @@ struct Camera {
 
     // Calculate camera position in world space
     vec3 position() const {
-        float clampedElevation = clamp(elevation, 0.01f, float(M_PI) - 0.01f);
+        float clampedElevation = glm::clamp(elevation, 0.01f, float(M_PI) - 0.01f);
         // Orbit around (0,0,0) always
         return vec3(
             radius * sin(clampedElevation) * cos(azimuth),
@@ -78,7 +78,7 @@ struct Camera {
             // Orbit: Left mouse only
             azimuth   += dx * orbitSpeed;
             elevation -= dy * orbitSpeed;
-            elevation = clamp(elevation, 0.01f, float(M_PI) - 0.01f);
+            elevation = glm::clamp(elevation, 0.01f, float(M_PI) - 0.01f);
         }
 
         lastX = x;
@@ -107,7 +107,7 @@ struct Camera {
     }
     void processScroll(double xoffset, double yoffset) {
         radius -= yoffset * zoomSpeed;
-        radius = clamp(radius, minRadius, maxRadius);
+        radius = glm::clamp(radius, minRadius, maxRadius);
         update();
     }
     void processKey(int key, int scancode, int action, int mods) {
@@ -144,7 +144,7 @@ struct ObjectData {
 vector<ObjectData> objects = {
     { vec4(4e11f, 0.0f, 0.0f, 4e10f)   , vec4(1,1,0,1), 1.98892e30 },
     { vec4(0.0f, 0.0f, 4e11f, 4e10f)   , vec4(1,0,0,1), 1.98892e30 },
-    { vec4(0.0f, 0.0f, 0.0f, SagA.r_s) , vec4(0,0,0,1), SagA.mass  },
+    { vec4(0.0f, 0.0f, 0.0f, SagA.r_s) , vec4(0,0,0,1), static_cast<float>(SagA.mass)  },
     //{ vec4(6e10f, 0.0f, 0.0f, 5e10f), vec4(0,1,0,1) }
 };
 
