@@ -1,4 +1,4 @@
-#include <GL/glew.h>
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -45,8 +45,7 @@ struct Engine {
             exit(EXIT_FAILURE);
         }
         glfwMakeContextCurrent(window);
-        glewExperimental = GL_TRUE;
-        if (glewInit() != GLEW_OK) {
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
             cerr << "Failed to initialize GLEW" << endl;
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -75,7 +74,7 @@ struct BlackHole {
     double radius;
     double r_s;
 
-    BlackHole(vec3 pos, float m) : position(pos), mass(m) {r_s = 2.0 * G * mass / (c*c);}
+    BlackHole(vec3 pos, float m) : position(pos), mass(m) {r_s = 2.0 *G* mass / (c*c);}
     void draw() {
         glBegin(GL_TRIANGLE_FAN);
         glColor3f(1.0f, 0.0f, 0.0f);               // Red color for the black hole
@@ -90,6 +89,7 @@ struct BlackHole {
     }
 };
 BlackHole SagA(vec3(0.0f, 0.0f, 0.0f), 8.54e36); // Sagittarius A black hole
+
 struct Ray{
     // -- cartesian coords -- //
     double x;   double y;
@@ -161,6 +161,7 @@ struct Ray{
 };
 vector<Ray> rays;
 
+
 void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
     double r    = ray.r;
     double dr   = ray.dr;
@@ -213,7 +214,12 @@ void rk4Step(Ray& ray, double dλ, double rs) {
 
 
 int main () {
+
     //rays.push_back(Ray(vec2(-1e11, 3.27606302719999999e10), vec2(c, 0.0f)));
+    for(float y =-engine.height;y < engine.height; y+=1e10) {
+	    rays.push_back(Ray(vec2(-engine.width, y),vec2(c,0.0)));
+
+    }   
     while(!glfwWindowShouldClose(engine.window)) {
         engine.run();
         SagA.draw();

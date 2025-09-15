@@ -49,7 +49,7 @@ $RECYCLE.BIN/
 
 # CMake
 cmake-build-*/
-
+external
 build
 
 ##### CMake
