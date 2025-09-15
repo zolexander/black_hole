@@ -58,15 +58,41 @@ If you don't want to use vcpkg, or you just need a quick way to install the nati
 ```bash
 sudo apt update
 sudo apt install build-essential cmake \
-	libglew-dev libglfw3-dev libglm-dev libgl1-mesa-dev
+	libglfw3-dev libglm-dev libgl1-mesa-dev
 ```
 
-This provides the GLEW, GLFW, GLM and OpenGL development files so `find_package(...)` calls in `CMakeLists.txt` can locate the libraries. After installing, run the `cmake -B build -S .` and `cmake --build build` commands as shown in the Build Instructions.
+This provides the  GLFW, GLM and OpenGL development files so `find_package(...)` calls in `CMakeLists.txt` can locate the libraries.
+What's completely different in this repository, I use glad instead of glew loader, the reason behind, that I would like
+simulating Kerr blackholes, and for this purpose I replaced it. 
+For this glad loader:
+
+Download directly from the official [glad generator](https://gen.glad.sh/) with these settings:
+Language: C/C++
+
+API: OpenGL → Version 4.6 → Profile Core
+
+Options: Generate loader ✅
+
+Extensions: leave empty. Extract this zip file to the external/glad/ directory.
+
+After installing, run the `cmake -B build -S .` and `cmake --build build` commands as shown in the Build Instructions.
+Or you can use the automake.sh bash file. This a primitiv helper for easier  compiling process. This script creates himself the build directory if it does not exist.
+
+
+```
+automake.sh [-b|--build DIRECTORY] [-c] [-h|--help]
+    "Options:"
+    	-b, --build DIRECTORY      Specify a directory for building"
+        -c, --clear-build          Clear the complete build directory content with cache together"
+        -h, --help                 ${NC}Display this help message"
+
+```
+
 
 ## **How the code works:**
-for 2D: simple, just run 2D_lensing.cpp with the nessesary dependencies installed.
+for 2D Schwarzschield blackhole: simple, just run 2D_lensing.cpp with the nessesary dependencies installed.
 
-for 3D: black_hole.cpp and geodesic.comp work together to run the simuation faster using GPU, essentially it sends over a UBO and geodesic.comp runs heavy calculations using that data.
+for 3D Schwarzschield blackhole: black_hole.cpp and geodesic.comp work together to run the simuation faster using GPU, essentially it sends over a UBO and geodesic.comp runs heavy calculations using that data.
 
 should work with nessesary dependencies installed, however I have only run it on windows with my GPU so am not sure!
 
