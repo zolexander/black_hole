@@ -5,6 +5,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <iostream>
+#include "imgui.h"
+#include "backends/imgui_impl_glfw.h"
+#include "backends/imgui_impl_opengl3.h"
 #define _USE_MATH_DEFINES
 #include <cmath>
 
@@ -22,6 +25,7 @@ const double G = 6.67430e-11;
 // --- Vorwärtsdeklarationen --- //
 struct Ray;
 void rk4Step(Ray& ray, double dLambda, double schwarzschildRadius);
+void rk4StepKerr(Ray& ray, double dLambda, double rs, double a); // <--- Diese Zeile ergänzen
 
 // --- Engine für Fenster und Navigation --- //
 struct Engine {
@@ -57,7 +61,14 @@ struct Engine {
         }
         glViewport(0, 0, pixelWidth, pixelHeight);
     }
-
+    void setupImGui() {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGui::StyleColorsDark();
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
+        ImGui_ImplOpenGL3_Init("#version 330");
+    }
     void setupViewport() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION);
@@ -156,16 +167,51 @@ struct Ray {
         glDisable(GL_BLEND);
     }
 
-    void step(double dLambda, double schwarzschildRadius) {
-        if (r <= schwarzschildRadius) return; // Stop bei Ereignishorizont
+    // ...im Ray struct...
+    void step(double dLambda, double schwarzschildRadius, double kerr_a = 0.0, bool useKerr = false) {
+        if (r <= schwarzschildRadius) return;
+        if (useKerr && kerr_a > 0.0) {
+            rk4StepKerr(*this, dLambda, schwarzschildRadius, kerr_a);
+        } else {
         rk4Step(*this, dLambda, schwarzschildRadius);
+        }
         x = r * cos(phi);
         y = r * sin(phi);
         trail.push_back({float(x), float(y)});
     }
-};
+    };
 vector<Ray> rays;
+// Kerr-Äquator-Gleichung (vereinfachte Näherung für kleine a)
+void geodesicRHS_Kerr(const Ray& ray, double rhs[4], double rs, double a) {
+    // rs = 2GM/c^2, a = Kerr-Parameter (J/Mc)
+    double r = ray.r;
+    double dr = ray.dr;
+    double dphi = ray.dphi;
+    double u = 1.0 / r;
+    double phi = ray.phi;
 
+    // Näherung: d^2u/dphi^2 + u = 3Mu^2 - 2aMu^3
+    // Wir schreiben das als System erster Ordnung:
+    // y[0] = u, y[1] = du/dphi
+    // dy[0]/dphi = y[1]
+    // dy[1]/dphi = -y[0] + 3*M*y[0]^2 - 2*a*M*y[0]^3
+
+    double M = rs / 2.0; // rs = 2GM/c^2 -> M = GM/c^2
+
+    rhs[0] = dr; // dr/dlambda
+    rhs[1] = dphi; // dphi/dlambda
+
+    // du/dphi = dr/dlambda / dphi/dlambda
+    double du_dphi = (dr / dphi) / (r * r);
+
+    // d^2u/dphi^2
+    double d2u_dphi2 = -u + 3.0 * M * u * u - 2.0 * a * M * u * u * u;
+
+    // dr/dlambda = du/dphi * dphi/dlambda * r^2
+    rhs[2] = d2u_dphi2 * dphi * r * r;
+    // dphi bleibt gleich
+    rhs[3] = 0.0;
+}
 // --- Geodätengleichungen (Schwarzschild) --- //
 void geodesicRHS(const Ray& ray, double rhs[4], double rs) {
     double r = ray.r;
@@ -212,25 +258,76 @@ void rk4Step(Ray& ray, double dLambda, double rs) {
     ray.dr   += (dLambda / 6.0) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
     ray.dphi += (dLambda / 6.0) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]);
 }
+void rk4StepKerr(Ray& ray, double dLambda, double rs, double a) {
+    double y0[4] = { ray.r, ray.phi, ray.dr, ray.dphi };
+    double k1[4], k2[4], k3[4], k4[4], temp[4];
 
+    geodesicRHS_Kerr(ray, k1, rs, a);
+    addState(y0, k1, dLambda / 2.0, temp);
+    Ray r2 = ray; r2.r = temp[0]; r2.phi = temp[1]; r2.dr = temp[2]; r2.dphi = temp[3];
+    geodesicRHS_Kerr(r2, k2, rs, a);
+
+    addState(y0, k2, dLambda / 2.0, temp);
+    Ray r3 = ray; r3.r = temp[0]; r3.phi = temp[1]; r3.dr = temp[2]; r3.dphi = temp[3];
+    geodesicRHS_Kerr(r3, k3, rs, a);
+
+    addState(y0, k3, dLambda, temp);
+    Ray r4 = ray; r4.r = temp[0]; r4.phi = temp[1]; r4.dr = temp[2]; r4.dphi = temp[3];
+    geodesicRHS_Kerr(r4, k4, rs, a);
+
+    ray.r    += (dLambda / 6.0) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+    ray.phi  += (dLambda / 6.0) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+    ray.dr   += (dLambda / 6.0) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+    ray.dphi += (dLambda / 6.0) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]);
+}
 // --- Hauptprogramm --- //
 int main() {
     // Strahlen initialisieren
     for (float y = -engine.physHeight; y < engine.physHeight; y += 1e10) {
         rays.push_back(Ray(vec2(-engine.physWidth, y), vec2(c, 0.0)));
     }
-
+    engine.setupImGui();
+    
     // Hauptloop
     while (!glfwWindowShouldClose(engine.window)) {
         engine.setupViewport();
         SagA.draw();
-
-        for (auto& ray : rays) {
-            ray.step(1.0f, SagA.r_s);
-            ray.drawTrailAndPoint(rays);
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();// ...im Hauptloop, vor ImGui::End()
+        static bool bh_type = false;
+        const char* types[] = { "Schwarzschild (nicht-rotierend)", "Kerr (rotierend)" };
+        
+        ImGui::Begin("Controls");
+        ImGui::Text("Number of Rays: %d", (int)rays.size());
+        ImGui::Text("Black Hole Mass: %.2e kg", SagA.mass);
+        ImGui::Text("Schwarzschild Radius: %.2e m", SagA.r_s);
+        ImGui::Checkbox("Rotierend blackhole", &bh_type);
+        
+        if(ImGui::Button("Reset Rays")) {
+            rays.clear();
+            for (float y = -engine.physHeight; y < engine.physHeight; y += 1e10) {
+                rays.push_back(Ray(vec2(-engine.physWidth, y), vec2(c, 0.0)));
+            }
         }
 
+        float a = 0.0f; // Kerr-Parameter (a = J/M, Drehimpuls pro Masse)
+        if (bh_type == true) {
+            //ImGui::SliderFloat("Kerr-Parameter a [m]", &a, 0.0f, SagA.r_s * 0.5f, "%.2e");
+            a=SagA.r_s * 0.05f; // Maximale Rotation   
+        }
+        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+        if (a > SagA.r_s * 0.1f) ImGui::TextColored(ImVec4(1,0.5,0,1), "Warnung: Näherung nur für kleine Kerr-Parameter gültig!");
+        ImGui::End();
+       for (auto& ray : rays) {
+            ray.step(1.0f, SagA.r_s, a, bh_type);
+            ray.drawTrailAndPoint(rays);
+        }
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(engine.window);
+
         glfwPollEvents();
     }
 

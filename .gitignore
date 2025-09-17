@@ -50,6 +50,7 @@ $RECYCLE.BIN/
 # CMake
 cmake-build-*/
 external/glad/*
+external/imgui/*
 build
 
 ##### CMake
