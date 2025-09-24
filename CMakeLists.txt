@@ -10,6 +10,7 @@ find_package(PkgConfig REQUIRED)
 pkg_search_module(GLFW REQUIRED glfw3)
 find_package(glm REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # --- GLAD-Bibliothek einbinden --- #
 add_library(glad STATIC external/glad/src/glad.c)
@@ -51,7 +52,28 @@ target_link_libraries(BlackHole3D PRIVATE
     imgui
 )
 target_include_directories(BlackHole3D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
+add_executable(KerrBlackHole kerr_blackhole.cpp)
+target_link_libraries(KerrBlackHole PRIVATE
+    glad
+    ${OpenMP_LIBRARIES}
+    glm::glm
+    ${GLFW_LIBRARIES}
+    dl
+    pthread
+    imgui
+)
+target_include_directories(KerrBlackHole PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(mainKerr main.cpp kerrintegrate.cpp kerrstate.cpp engine.cpp)
+target_link_libraries(mainKerr PRIVATE
+    glad
+    ${OpenMP_LIBRARIES}
+    glm::glm
+    ${GLFW_LIBRARIES}
+    dl
+    pthread
+    imgui
+)
+target_include_directories(mainKerr PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # --- Shader-Dateien ins Ausgabeverzeichnis kopieren --- #
 file(GLOB SHADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.vert"

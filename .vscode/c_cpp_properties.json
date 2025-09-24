@@ -6,7 +6,7 @@
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/external/glad/include",
                 "${workspaceFolder}/external/imgui",
-                "${workspaceFolder}/external/imgui/backends",
+                "${workspaceFolder}/external/imgui/backends"
 
             ],
             "defines": [],
