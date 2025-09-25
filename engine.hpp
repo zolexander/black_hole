@@ -21,11 +21,14 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <kerrstate.hpp>
+#include <filesystem>
+#include <optional>
 namespace BlackholeSim
 {
-    struct Engine
+    class Engine
     {
         // Window & GL
+    public:
         GLFWwindow *window = nullptr;
 
         // Photons
@@ -55,21 +58,23 @@ namespace BlackholeSim
         // RNG for initial y distribution
         std::default_random_engine rng;
         std::uniform_real_distribution<double> dist{-5.0, 5.0};
-
-        // Konstruktor/Destruktor
         Engine();
         ~Engine();
-        std::string readFromFile(const char* filePath);
-        GLuint loadShader(const char* vertexPath, const char* fragmentPath);
-
-        // Methoden
+  
+        void run();
         bool initGL(const char *title, int w, int h);
+    
+        std::optional<std::filesystem::path> abspath_no_traversal(
+            const std::filesystem::path &basepath,
+            const std::filesystem::path &relpath);
+        std::string readFromFile(const char *filePath);
+        GLuint loadShader(const char *vertexPath, const char *fragmentPath);
+        // Konstruktor/Destruktor
         void resetPhotons(int count);
         void updateKerrPhotons(double a_spin);
         void updateTestPhotons(double h, double M);
         void drawKerrPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat);
         void drawTestPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat);
-        void run();
     };
 }
 #endif // BLACKHOLESIM_ENGINE_HPP

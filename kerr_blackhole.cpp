@@ -1,184 +1,139 @@
 // kerr_blackhole.cpp
-// Minimal, self-contained example integrating ideas from the chat:
-// - Two modes (Kerr / Test)
-// - Photon trails as vector<glm::vec2>
-// - Trail length controlled from ImGui
-// - VAO/VBO rendering with shader (location = 0)
-// - Additive blending glow + alpha per draw segment
-//
-// NOTE: Replace / integrate your real Kerr integrator (f_r/f_phi) if available.
-// This demo uses a simplified "Kerr-like" integrator stub and a cartesian test integrator.
+// Minimal Kerr/Test Photon Demo (refactored for clarity)
 
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <string>
 #include <random>
-#include <chrono>
-
-// OpenGL / GLFW / GLAD / ImGui / GLM includes
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-
-// ImGui (assumes you have ImGui integrated)
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
-// glm
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
+//-----------------------------
+// Physik: State-Strukturen
+//-----------------------------
+struct KerrState { double r, phi; };
+struct CartesianState { double x, y, vx, vy; };
 
-////////////////////////////////////////////////////////////////////////////////
-// Simple structures for Kerr and Cartesian states
-////////////////////////////////////////////////////////////////////////////////
-
-struct KerrState {
-    double r;
-    double phi;
-};
-
-struct CartesianState {
-    double x, y;
-    double vx, vy;
-};
-
-////////////////////////////////////////////////////////////////////////////////
-// Photon class for Kerr-mode (stores KerrState, but trail is cartesian points)
-////////////////////////////////////////////////////////////////////////////////
-
+//-----------------------------
+// Photon-Klassen
+//-----------------------------
 struct Photon {
     KerrState s;
-    double L;
-    double h;
+    double L, h;
     bool alive;
     std::vector<glm::vec2> trail;
 
-    Photon(double L_ = 0.0) : L(L_), h(0.01), alive(true) {
-        s = {4.0, M_PI};
-        trail.reserve(256);
-    }
-
+    Photon(double L_ = 0.0) : L(L_), h(0.01), alive(true) { s = {4.0, M_PI}; trail.reserve(256); }
     void reset(double L_, const KerrState &startState) {
-        L = L_;
-        s = startState;
-        h = 0.01;
-        alive = true;
-        trail.clear();
-        trail.reserve(256);
+        L = L_; s = startState; h = 0.01; alive = true; trail.clear(); trail.reserve(256);
     }
 };
-
-////////////////////////////////////////////////////////////////////////////////
-// TestPhoton class for cartesian-mode (keeps trail too)
-////////////////////////////////////////////////////////////////////////////////
 
 struct TestPhoton {
     CartesianState s;
     bool alive;
     std::vector<glm::vec2> trail;
 
-    TestPhoton(double x0 = -20.0, double y0 = 0.0) {
-        s = {x0, y0, 1.0, 0.0};
-        alive = true;
-        trail.reserve(256);
+    TestPhoton(double x0 = -20.0, double y0 = 0.0) : alive(true) {
+        s = {x0, y0, 1.0, 0.0}; trail.reserve(256);
     }
-
     void reset(double x0, double y0) {
-        s.x = x0; s.y = y0;
-        s.vx = 1.0; s.vy = 0.0;
-        alive = true;
-        trail.clear();
-        trail.reserve(256);
+        s = {x0, y0, 1.0, 0.0}; alive = true; trail.clear(); trail.reserve(256);
     }
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// Simple "integrator" for Kerr-like motion (stub).
-// The real physics is more complicated — replace f_r/f_phi + integrator if available.
-////////////////////////////////////////////////////////////////////////////////
-
-inline double Delta(double r, double a) {
-    return r*r - 2.0*r + a*a; // geometric units M=1 assumption (simplified)
-}
-
-// A sample R(r, L, a) placeholder; the real R_of_r is more complex.
+//-----------------------------
+// Physik: Kerr-Integrationsfunktionen (vereinfachtes Modell)
+//-----------------------------
+inline double Delta(double r, double a) { return r*r - 2.0*r + a*a; }
 inline double R_of_r(double r, double L, double a) {
-    // Toy potential: allow radial motion; keep positive in some region.
     double U = 1.0 - 2.0/r;
     return std::max(0.0, U - (L*L)/(r*r));
 }
-
-// simplified dr/dlambda and dphi/dlambda functions (toy)
 inline double f_r(double r, double L, double a) {
     double val = R_of_r(r, L, a);
     return -sqrt(std::max(0.0, val)) / (r*r + 1e-9);
 }
 inline double f_phi(double r, double L, double a) {
-    double sig = r*r;
-    double del = Delta(r, a);
-    double A = (r*r + a*a) - a*L;
-    // simplified variant that depends only on r,L,a
+    double sig = r*r, del = Delta(r, a), A = (r*r + a*a) - a*L;
     return (a/del)*A - (a - L)/sig;
 }
-
-// RKF-like integrator for KerrState (toy RK4 with small step)
 KerrState integrateKerr(const KerrState &s0, double L, double &h, double a_spin) {
-    // simple RK4 integrator on (r,phi) with derivatives f_r, f_phi
-    auto f = [&](const KerrState &st)->KerrState {
-        return { f_r(st.r, L, a_spin), f_phi(st.r, L, a_spin) };
-    };
-
+    auto f = [&](const KerrState &st)->KerrState { return { f_r(st.r, L, a_spin), f_phi(st.r, L, a_spin) }; };
     KerrState k1 = f(s0);
-    KerrState s2  = { s0.r + 0.5*h*k1.r, s0.phi + 0.5*h*k1.phi };
+    KerrState s2 = { s0.r + 0.5*h*k1.r, s0.phi + 0.5*h*k1.phi };
     KerrState k2 = f(s2);
-    KerrState s3  = { s0.r + 0.5*h*k2.r, s0.phi + 0.5*h*k2.phi };
+    KerrState s3 = { s0.r + 0.5*h*k2.r, s0.phi + 0.5*h*k2.phi };
     KerrState k3 = f(s3);
-    KerrState s4  = { s0.r + h*k3.r, s0.phi + h*k3.phi };
+    KerrState s4 = { s0.r + h*k3.r, s0.phi + h*k3.phi };
     KerrState k4 = f(s4);
-
     KerrState out;
     out.r   = s0.r + (h/6.0)*(k1.r + 2*k2.r + 2*k3.r + k4.r);
     out.phi = s0.phi + (h/6.0)*(k1.phi + 2*k2.phi + 2*k3.phi + k4.phi);
     return out;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Engine: holds photons, testPhotons, mode, GUI parameters, VBO/VAO/shader
-////////////////////////////////////////////////////////////////////////////////
+//-----------------------------
+// OpenGL Shader-Hilfsfunktionen
+//-----------------------------
+GLuint compileShader(GLenum type, const char *src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char buf[1024]; glGetShaderInfoLog(s, 1024, nullptr, buf);
+        std::cerr << "Shader compile error: " << buf << std::endl;
+    }
+    return s;
+}
+GLuint makeProgram(const char *vsSrc, const char *fsSrc) {
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc);
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs); glAttachShader(p, fs); glLinkProgram(p);
+    GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char buf[1024]; glGetProgramInfoLog(p, 1024, nullptr, buf);
+        std::cerr << "Program link error: " << buf << std::endl;
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return p;
+}
 
-enum class Mode { Kerr = 0, Test = 1 };
-
+//-----------------------------
+// Engine: Hauptklasse für Physik und Rendering
+//-----------------------------
 struct Engine {
-    // Window & GL
+    // Fenster & GL
     GLFWwindow* window = nullptr;
 
-    // Photons
+    // Photonen
     std::vector<Photon> kerrPhotons;
     std::vector<TestPhoton> testPhotons;
 
-    // Params
+    // Parameter
     int photonCount = 200;
     size_t trailLength = 200;
     double zoom = 0.2;
-    double a_spin = 0.7; // initial spin for Kerr
-    Mode mode = Mode::Kerr;
+    double a_spin = 0.7; // Anfangsrotation für Kerr
+    enum class Mode { Kerr = 0, Test = 1 } mode = Mode::Kerr;
 
-    // GL assets
-    GLuint prog = 0;
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLint colorLoc = -1;
-    GLint zoomLoc = -1;
-    GLint alphaLoc = -1;
-    GLint projLoc = -1;
-    GLint viewLoc = -1;
+    // GL-Objekte
+    GLuint prog = 0, vao = 0, vbo = 0;
+    GLint colorLoc = -1, zoomLoc = -1, alphaLoc = -1, projLoc = -1, viewLoc = -1;
 
-    // camera projection
+    // Kameraprojektion
     glm::mat4 proj, view;
 
-    // RNG for initial y distribution
+    // RNG für die Anfangsverteilung
     std::default_random_engine rng;
     std::uniform_real_distribution<double> dist{-5.0, 5.0};
 
@@ -215,7 +170,7 @@ struct Engine {
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // simple shaders
+        // einfache Shader
         const char* vs = R"(
             #version 330 core
             layout(location = 0) in vec2 pos;
@@ -243,7 +198,7 @@ struct Engine {
         projLoc = glGetUniformLocation(prog, "proj");
         viewLoc = glGetUniformLocation(prog, "view");
 
-        // VAO/VBO setup
+        // VAO/VBO einrichten
         glGenVertexArrays(1, &vao);
         glGenBuffers(1, &vbo);
         glBindVertexArray(vao);
@@ -254,16 +209,16 @@ struct Engine {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        // blending
+        // Blending
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         glDisable(GL_DEPTH_TEST);
 
-        // projection / view
+        // Projektions-/Sichtmatrix
         proj = glm::ortho(-40.0f, 40.0f, -30.0f, 30.0f, -1.0f, 1.0f);
         view = glm::mat4(1.0f);
 
-        // init photons
+        // Photonen initialisieren
         resetPhotons(photonCount);
 
         return true;
@@ -274,15 +229,15 @@ struct Engine {
         if (mode == Mode::Kerr) {
             kerrPhotons.clear();
             kerrPhotons.reserve(photonCount);
-            // create L spread and start positions spread along vertical line at x0
+            // Erstelle L-Verteilung und Startpositionen entlang einer vertikalen Linie bei x0
             double x0 = -30.0;
             double yMin = -8.0, yMax = 8.0;
             for (int i = 0; i < photonCount; ++i) {
                 double y0 = yMin + (yMax - yMin) * (i / double(std::max(1, photonCount - 1)));
-                // convert to polar (r,phi)
+                // Umwandlung in polare Koordinaten (r,phi)
                 double r0 = std::sqrt(x0*x0 + y0*y0);
                 double phi0 = std::atan2(y0, x0);
-                double L = y0; // use y as impact parameter -> L
+                double L = y0; // Verwende y als Impulsparameter -> L
                 Photon p(L);
                 p.reset(L, {r0, phi0});
                 p.trail.reserve(trailLength);
@@ -303,22 +258,22 @@ struct Engine {
         }
     }
 
-    // Update functions
+    // Update-Funktionen
     void updateKerrPhotons(double a_spin) {
         for (auto &p : kerrPhotons) {
             if (!p.alive) continue;
-            // integrate in Kerr coords (toy integrator)
+            // Integration in Kerr-Koordinaten (Spielzeug-Integrator)
             p.s = integrateKerr(p.s, p.L, p.h, a_spin);
-            // store cartesian point
+            // Speichere kartesischen Punkt
             float x = (float)(p.s.r * cos(p.s.phi));
             float y = (float)(p.s.r * sin(p.s.phi));
             p.trail.emplace_back(x, y);
-            // trim
+            // Kürzen
             if (p.trail.size() > trailLength) {
                 size_t remove = p.trail.size() - trailLength;
                 p.trail.erase(p.trail.begin(), p.trail.begin() + remove);
             }
-            // horizon test
+            // Horizont-Test
             if (p.s.r < 2.0) p.alive = false;
         }
     }
@@ -328,7 +283,7 @@ struct Engine {
             if (!p.alive) continue;
             double r = std::sqrt(p.s.x*p.s.x + p.s.y*p.s.y);
             double rs = 2.0 * M;
-            // gravitational acceleration (Newtonian central) as toy model
+            // Gravitationsbeschleunigung (newtonsche Zentrale) als Spielzeugmodell
             double ax = -M * p.s.x / (r*r*r + 1e-9);
             double ay = -M * p.s.y / (r*r*r + 1e-9);
             p.s.vx += ax * h;
@@ -338,7 +293,7 @@ struct Engine {
                 p.s.vx /= norm;
                 p.s.vy /= norm;
             }
-            p.s.x += p.s.vx * h * 10.0; // scale step for visibility
+            p.s.x += p.s.vx * h * 10.0; // Schritt für Sichtbarkeit skalieren
             p.s.y += p.s.vy * h * 10.0;
             p.trail.emplace_back((float)p.s.x, (float)p.s.y);
             if (p.trail.size() > trailLength) {
@@ -349,7 +304,7 @@ struct Engine {
         }
     }
 
-    // Draw helpers
+    // Zeichenhilfen
     void drawKerrPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat) {
         glUseProgram(shader);
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projMat));
@@ -361,10 +316,10 @@ struct Engine {
 
         for (const auto &p : kerrPhotons) {
             if (p.trail.size() < 2) continue;
-            // push trail data
+            // Traildaten übertragen
             glBufferData(GL_ARRAY_BUFFER, p.trail.size() * sizeof(glm::vec2), p.trail.data(), GL_DYNAMIC_DRAW);
 
-            // color based on frequency-shift-ish (we don't compute real freq shift here)
+            // Farbe basierend auf Frequenzverschiebung (wir berechnen hier keine echte Frequenzverschiebung)
             float rcol = 0.8f;
             float bcol = 0.2f;
 
@@ -388,7 +343,7 @@ struct Engine {
     }
 
     void drawTestPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat) {
-        // same code, but iterate testPhotons
+        // gleiche Code, aber iteriere über testPhotons
         glUseProgram(shader);
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projMat));
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(viewMat));
@@ -432,20 +387,20 @@ struct Engine {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            // Control window
+            // Steuerungsfenster
             ImGui::Begin("Kontrolle");
             if (ImGui::SliderInt("Photonen", &photonCount, 10, 2000)) {
                 resetPhotons(photonCount);
             }
             double amin = 0.0, amax = 1.0;
             if (ImGui::SliderScalar("Spin a/M", ImGuiDataType_Double, &a_spin, &amin, &amax)) {
-                // nothing else needed here; integrator reads a_spin each step
+                // nichts weiter hier nötig; Integrator liest a_spin bei jedem Schritt
             }
             size_t trmin = 10, trmax = 5000;
             uint64_t tmp = (uint64_t)trailLength;
             if (ImGui::SliderScalar("Trail", ImGuiDataType_U64, &tmp, &trmin, &trmax)) {
                 trailLength = (size_t)tmp;
-                // reserve for existing photons
+                // reservieren für vorhandene Photonen
                 for (auto &p : kerrPhotons) p.trail.reserve(trailLength);
                 for (auto &p : testPhotons) p.trail.reserve(trailLength);
             }
@@ -465,14 +420,14 @@ struct Engine {
             ImGui::Text("Photons: %d  TrailLen: %zu", photonCount, trailLength);
             ImGui::End();
 
-            // update physics
+            // Physik aktualisieren
             if (mode == Mode::Kerr) {
                 updateKerrPhotons(a_spin);
             } else {
                 updateTestPhotons(0.01, 1.0);
             }
 
-            // debug output occasionally
+            // Debug-Ausgabe gelegentlich
             static int dbg = 0;
             if ((dbg++ % 300) == 0) {
                 if (!kerrPhotons.empty())
@@ -488,53 +443,23 @@ struct Engine {
                               << " alive=" << testPhotons.front().alive << std::endl;
             }
 
-            // render
+            // rendern
             int display_w, display_h;
             glfwGetFramebufferSize(window, &display_w, &display_h);
             glViewport(0, 0, display_w, display_h);
             glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            // draw photons
+            // Photonen zeichnen
             if (mode == Mode::Kerr) drawKerrPhotons(prog, proj, view);
             else drawTestPhotons(prog, proj, view);
 
-            // ImGui render
+            // ImGui rendern
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glfwSwapBuffers(window);
         }
-    }
-
-    // Shader helpers
-    static GLuint compileShader(GLenum type, const char *src) {
-        GLuint s = glCreateShader(type);
-        glShaderSource(s, 1, &src, nullptr);
-        glCompileShader(s);
-        GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-        if (!ok) {
-            char buf[1024]; glGetShaderInfoLog(s, 1024, nullptr, buf);
-            std::cerr << "Shader compile error: " << buf << std::endl;
-        }
-        return s;
-    }
-
-    static GLuint makeProgram(const char *vsSrc, const char *fsSrc) {
-        GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
-        GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc);
-        GLuint p = glCreateProgram();
-        glAttachShader(p, vs);
-        glAttachShader(p, fs);
-        glLinkProgram(p);
-        GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
-        if (!ok) {
-            char buf[1024]; glGetProgramInfoLog(p, 1024, nullptr, buf);
-            std::cerr << "Program link error: " << buf << std::endl;
-        }
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        return p;
     }
 
     ~Engine() {
