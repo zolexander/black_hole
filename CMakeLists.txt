@@ -63,7 +63,7 @@ target_link_libraries(KerrBlackHole PRIVATE
     imgui
 )
 target_include_directories(KerrBlackHole PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_executable(mainKerr main.cpp kerrintegrate.cpp kerrstate.cpp engine.cpp)
+add_executable(mainKerr main.cpp kerrintegrate.cpp blackholesim.cpp engine.cpp)
 target_link_libraries(mainKerr PRIVATE
     glad
     ${OpenMP_LIBRARIES}

@@ -18,7 +18,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <kerrstate.hpp>
+#include <blackholesim.hpp>
+
 BlackholeSim::Photon::Photon(double L_ = 0.0) : L(L_), h(0.01), alive(true)
 {
     s = {4.0, M_PI};

@@ -20,7 +20,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <kerrstate.hpp>
+#include <blackholesim.hpp>
 #include <filesystem>
 #include <optional>
 namespace BlackholeSim
@@ -60,17 +60,18 @@ namespace BlackholeSim
         std::uniform_real_distribution<double> dist{-5.0, 5.0};
         Engine();
         ~Engine();
-  
+
         void run();
         bool initGL(const char *title, int w, int h);
-    
+        void resetPhotons(int count);
+
+    private:
         std::optional<std::filesystem::path> abspath_no_traversal(
             const std::filesystem::path &basepath,
             const std::filesystem::path &relpath);
         std::string readFromFile(const char *filePath);
         GLuint loadShader(const char *vertexPath, const char *fragmentPath);
         // Konstruktor/Destruktor
-        void resetPhotons(int count);
         void updateKerrPhotons(double a_spin);
         void updateTestPhotons(double h, double M);
         void drawKerrPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat);

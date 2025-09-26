@@ -1,13 +1,17 @@
-#ifndef BLACKHOLESIM_KERRSTATE_HPP
-#define BLACKHOLESIM_KERRSTATE_HPP
-// ... dein bisheriger Code ...
+#ifndef BLACKHOLESIM_HPP
+#define BLACKHOLESIM_HPP
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
+// namespace BlackholeSim
 namespace BlackholeSim
 {
-    enum class Mode { Kerr = 0, Test = 1 };
+    enum class Mode
+    {
+        Kerr = 0,
+        Test = 1
+    };
 
     struct KerrState
     {
