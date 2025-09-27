@@ -1,5 +1,5 @@
 
-#include <blackholesim.hpp>
+#include "blackholesim.hpp"
 #include <cmath>
 namespace BlackholeSim
 {

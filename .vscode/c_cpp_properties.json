@@ -4,16 +4,20 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/external/glad/include",
                 "${workspaceFolder}/external/imgui",
-                "${workspaceFolder}/external/imgui/backends"
-
+                "${workspaceFolder}/external/imgui/backends",
+                "${workspaceFolder}/external/glfw/include",
+                "${workspaceFolder}/external/glfw/deps",
+                "${workspaceFolder}/build/_deps/glad-src/include",
+                "${workspaceFolder}/build/_deps/glad-build/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/clang-18",
             "cStandard": "c17",
             "cppStandard": "c++17",
-            "intelliSenseMode": "linux-clang-x64"
+            "intelliSenseMode": "linux-clang-x64",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
         }
     ],
     "version": 4

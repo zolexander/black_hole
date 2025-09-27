@@ -1,8 +1,8 @@
+#include "kerrintegrate.hpp"
+#include "kerr_inline.hpp"
 #include "engine.hpp"
-#include <kerrintegrate.hpp>
-#include <kerr_inline.hpp>
+#include <GLFW/glfw3.h>
 #include <fstream>
-#include <sstream>
 #include <filesystem>
 #include <optional>
 #include "panel.hpp"
@@ -10,15 +10,21 @@
 namespace BlackholeSim
 {
     Engine::Engine() {}
-    // Helperfunktionen
-    std::optional<std::filesystem::path> Engine::abspath_no_traversal(
-        const std::filesystem::path &basepath,
-        const std::filesystem::path &relpath)
+    
+    // ============================================================================
+    // UTILITY FUNCTIONS
+    // ============================================================================
+    /**
+     * @brief Validates that a relative path doesn't traverse outside the base directory
+     * @param basepath The base directory path
+     * @param relpath The relative path to validate
+     * @return Optional absolute path if valid, nullopt if path traversal detected
+     */
+    std::optional<std::filesystem::path> Engine::abspath_no_traversal(const std::filesystem::path &basepath,
+                                                                      const std::filesystem::path &relpath)
     {
-
         const auto abspath = std::filesystem::weakly_canonical(basepath / relpath);
-
-        // thanks to https://stackoverflow.com/questions/1878001/how-do-i-check-if-a-c-stdstring-starts-with-a-certain-string-and-convert-a
+        // Check if the resolved path starts with the base path to prevent directory traversal
         const auto index = abspath.string().rfind(basepath.string(), 0);
         if (index != 0)
         {
@@ -27,37 +33,64 @@ namespace BlackholeSim
         return abspath;
     }
 
+    /**
+     * @brief Safely reads a file's contents with path traversal protection
+     * @param filePath Path to the file to read
+     * @return File contents as string, empty string on error
+     */
     std::string Engine::readFromFile(const char *filePath)
     {
-        if (!std::filesystem::exists(filePath))
-        {
-            std::cerr << "File does not exist: " << filePath << "\n";
+        if (!filePath) {
+            std::cerr << "ERROR: Null file path provided\n";
             return "";
         }
-        if (abspath_no_traversal(std::filesystem::current_path(), filePath) == std::nullopt)
-        {
-            std::cerr << "File path traversal detected: " << filePath << "\n";
+        
+        if (!std::filesystem::exists(filePath)) {
+            std::cerr << "ERROR: File does not exist: " << filePath << "\n";
             return "";
         }
-        std::ifstream file;
-        file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
-        std::string code;
-        try
-        {
-            file.open(filePath);
-            std::stringstream stream;
-            stream << file.rdbuf();
-            file.close();
-            code = stream.str();
+        
+        if (abspath_no_traversal(std::filesystem::current_path(), filePath) == std::nullopt) {
+            std::cerr << "ERROR: File path traversal detected: " << filePath << "\n";
+            return "";
         }
-        catch (std::ifstream::failure &e)
-        {
-            std::cerr << "ERROR::FILE_NOT_SUCCESSFULLY_READ: " << filePath << "\n";
+        
+        try {
+            std::ifstream file(filePath, std::ios::in | std::ios::binary);
+            if (!file.is_open()) {
+                std::cerr << "ERROR: Cannot open file: " << filePath << "\n";
+                return "";
+            }
+            
+            // Get file size for efficient memory allocation
+            file.seekg(0, std::ios::end);
+            const auto fileSize = file.tellg();
+            file.seekg(0, std::ios::beg);
+            
+            std::string content;
+            content.reserve(static_cast<size_t>(fileSize));
+            content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+            
+            return content;
         }
-        return code;
+        catch (const std::exception& e) {
+            std::cerr << "ERROR: Failed to read file " << filePath << ": " << e.what() << "\n";
+            return "";
+        }
     }
 
-    bool Engine::initGL(const char *title = "Kerr photon demo", int w = 1200, int h = 800)
+    // ============================================================================
+    // INITIALIZATION FUNCTIONS
+    // ============================================================================
+    
+    /**
+     * @brief Initialize OpenGL context, shaders, and ImGui
+     * @param title Window title
+     * @param w Window width
+     * @param h Window height
+     * @return true if initialization successful, false otherwise
+     */
+    bool Engine::initGL(const char *title, int w, int h)
     {
         if (!glfwInit())
         {
@@ -78,9 +111,9 @@ namespace BlackholeSim
         }
 
         glfwMakeContextCurrent(window);
-        if (!gladLoadGL())
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
         {
-            std::cerr << "gladLoadGL failed\n";
+            std::cerr << "gladLoadGLLoader failed\n";
             return false;
         }
 
@@ -119,105 +152,185 @@ namespace BlackholeSim
         proj = glm::ortho(-40.0f, 40.0f, -30.0f, 30.0f, -1.0f, 1.0f);
         view = glm::mat4(1.0f);
 
-        // init photons
+        // Initialize photon simulation
         resetPhotons(photonCount);
 
         return true;
     }
 
+    // ============================================================================
+    // PHOTON MANAGEMENT
+    // ============================================================================
+    
+    /**
+     * @brief Reset and initialize photons for simulation
+     * @param count Number of photons to create
+     */
     void Engine::resetPhotons(int count)
     {
         photonCount = count;
-        if (mode == Mode::Kerr)
-        {
-            kerrPhotons.clear();
-            kerrPhotons.reserve(photonCount);
-            // create L spread and start positions spread along vertical line at x0
-            double x0 = -30.0;
-            double yMin = -8.0, yMax = 8.0;
-            for (int i = 0; i < photonCount; ++i)
-            {
-                double y0 = yMin + (yMax - yMin) * (i / double(std::max(1, photonCount - 1)));
-                // convert to polar (r,phi)
-                double r0 = std::sqrt(x0 * x0 + y0 * y0);
-                double phi0 = std::atan2(y0, x0);
-                double L = y0; // use y as impact parameter -> L
-                Photon p(L);
-                p.reset(L, {r0, phi0});
-                p.trail.reserve(trailLength);
-                kerrPhotons.push_back(std::move(p));
-            }
-        }
-        else
-        {
-            testPhotons.clear();
-            testPhotons.reserve(photonCount);
-            double x0 = -30.0;
-            double yMin = -8.0, yMax = 8.0;
-            for (int i = 0; i < photonCount; ++i)
-            {
-                double y0 = yMin + (yMax - yMin) * (i / double(std::max(1, photonCount - 1)));
-                TestPhoton p(x0, y0);
-                p.reset(x0, y0);
-                p.trail.reserve(trailLength);
-                testPhotons.push_back(std::move(p));
-            }
+        
+        if (mode == Mode::Kerr) {
+            initializeKerrPhotons();
+        } else {
+            initializeTestPhotons();
         }
     }
-    // Update functions
+    
+    /**
+     * @brief Initialize Kerr photons with proper initial conditions
+     */
+    void Engine::initializeKerrPhotons()
+    {
+        kerrPhotons.clear();
+        kerrPhotons.reserve(photonCount);
+        
+        // Create photons spread along vertical line at initial x position
+        const double x0 = Constants::INITIAL_X;
+        const double yMin = Constants::Y_MIN;
+        const double yMax = Constants::Y_MAX;
+        
+        for (int i = 0; i < photonCount; ++i) {
+            // Calculate y position with even distribution
+            const double y0 = calculatePhotonYPosition(i, yMin, yMax);
+            
+            // Convert Cartesian to polar coordinates (r, phi)
+            const double r0 = std::sqrt(x0 * x0 + y0 * y0);
+            const double phi0 = std::atan2(y0, x0);
+            const double L = y0; // Use y-coordinate as impact parameter L
+            
+            Photon photon(L);
+            photon.reset(L, {r0, phi0});
+            photon.trail.reserve(trailLength);
+            kerrPhotons.emplace_back(std::move(photon));
+        }
+    }
+    
+    /**
+     * @brief Initialize test photons for Newtonian simulation
+     */
+    void Engine::initializeTestPhotons()
+    {
+        testPhotons.clear();
+        testPhotons.reserve(photonCount);
+        
+        const double x0 = Constants::INITIAL_X;
+        const double yMin = Constants::Y_MIN;
+        const double yMax = Constants::Y_MAX;
+        
+        for (int i = 0; i < photonCount; ++i) {
+            const double y0 = calculatePhotonYPosition(i, yMin, yMax);
+            
+            TestPhoton photon(x0, y0);
+            photon.reset(x0, y0);
+            photon.trail.reserve(trailLength);
+            testPhotons.emplace_back(std::move(photon));
+        }
+    }
+    
+    /**
+     * @brief Calculate evenly distributed y-position for photon initialization
+     * @param index Photon index
+     * @param yMin Minimum y value
+     * @param yMax Maximum y value
+     * @return Calculated y position
+     */
+    double Engine::calculatePhotonYPosition(int index, double yMin, double yMax) const
+    {
+        const int denominator = std::max(1, photonCount - 1);
+        return yMin + (yMax - yMin) * (index / static_cast<double>(denominator));
+    }
+    // ============================================================================
+    // PHYSICS UPDATE FUNCTIONS
+    // ============================================================================
+    
+    /**
+     * @brief Update Kerr photons using relativistic integration
+     * @param a_spin Black hole spin parameter
+     */
     void Engine::updateKerrPhotons(double a_spin)
     {
-        for (auto &p : kerrPhotons)
-        {
-            if (!p.alive)
+        for (auto &photon : kerrPhotons) {
+            if (!photon.alive) {
                 continue;
-            // integrate in Kerr coords (toy integrator)
-            p.s = integrateKerr(p.s, p.L, p.h, a_spin);
-            // store cartesian point
-            float x = (float)(p.s.r * cos(p.s.phi));
-            float y = (float)(p.s.r * sin(p.s.phi));
-            p.trail.emplace_back(x, y);
-            // trim
-            if (p.trail.size() > trailLength)
-            {
-                size_t remove = p.trail.size() - trailLength;
-                p.trail.erase(p.trail.begin(), p.trail.begin() + remove);
             }
-            // horizon test
-            if (p.s.r < 2.0)
-                p.alive = false;
+            
+            // Integrate photon trajectory in Kerr coordinates
+            photon.s = integrateKerr(photon.s, photon.L, photon.h, a_spin);
+            
+            // Convert polar coordinates to Cartesian for rendering
+            const float x = static_cast<float>(photon.s.r * std::cos(photon.s.phi));
+            const float y = static_cast<float>(photon.s.r * std::sin(photon.s.phi));
+            photon.trail.emplace_back(x, y);
+            
+            // Maintain trail length by removing old points
+            trimPhotonTrail(photon.trail);
+            
+            // Check if photon has crossed the event horizon
+            if (photon.s.r < Constants::SCHWARZSCHILD_RADIUS) {
+                photon.alive = false;
+            }
         }
     }
 
+    /**
+     * @brief Update test photons using Newtonian gravity approximation
+     * @param h Integration time step
+     * @param M Mass of the central object
+     */
     void Engine::updateTestPhotons(double h, double M)
     {
-        for (auto &p : testPhotons)
-        {
-            if (!p.alive)
+        for (auto &photon : testPhotons) {
+            if (!photon.alive) {
                 continue;
-            double r = std::sqrt(p.s.x * p.s.x + p.s.y * p.s.y);
-            double rs = 2.0 * M;
-            // gravitational acceleration (Newtonian central) as toy model
-            double ax = -M * p.s.x / (r * r * r + 1e-9);
-            double ay = -M * p.s.y / (r * r * r + 1e-9);
-            p.s.vx += ax * h;
-            p.s.vy += ay * h;
-            double norm = std::sqrt(p.s.vx * p.s.vx + p.s.vy * p.s.vy);
-            if (norm > 1e-12)
-            {
-                p.s.vx /= norm;
-                p.s.vy /= norm;
             }
-            p.s.x += p.s.vx * h * 10.0; // scale step for visibility
-            p.s.y += p.s.vy * h * 10.0;
-            p.trail.emplace_back((float)p.s.x, (float)p.s.y);
-            if (p.trail.size() > trailLength)
-            {
-                size_t remove = p.trail.size() - trailLength;
-                p.trail.erase(p.trail.begin(), p.trail.begin() + remove);
+            
+            // Calculate distance from center
+            const double r = std::sqrt(photon.s.x * photon.s.x + photon.s.y * photon.s.y);
+            const double schwarzschildRadius = Constants::SCHWARZSCHILD_RADIUS * M;
+            
+            // Calculate Newtonian gravitational acceleration
+            const double rCubed = r * r * r + Constants::EPSILON; // Prevent division by zero
+            const double ax = -M * photon.s.x / rCubed;
+            const double ay = -M * photon.s.y / rCubed;
+            
+            // Update velocity
+            photon.s.vx += ax * h;
+            photon.s.vy += ay * h;
+            
+            // Normalize velocity to light speed (c = 1 in our units)
+            const double velocityMagnitude = std::sqrt(photon.s.vx * photon.s.vx + photon.s.vy * photon.s.vy);
+            if (velocityMagnitude > Constants::VELOCITY_THRESHOLD) {
+                photon.s.vx /= velocityMagnitude;
+                photon.s.vy /= velocityMagnitude;
             }
-            if (r < rs)
-                p.alive = false;
+            
+            // Update position with scaled step for better visibility
+            photon.s.x += photon.s.vx * h * Constants::VELOCITY_SCALE;
+            photon.s.y += photon.s.vy * h * Constants::VELOCITY_SCALE;
+            
+            // Add point to trail
+            photon.trail.emplace_back(static_cast<float>(photon.s.x), static_cast<float>(photon.s.y));
+            
+            // Maintain trail length
+            trimPhotonTrail(photon.trail);
+            
+            // Check if photon has been absorbed
+            if (r < schwarzschildRadius) {
+                photon.alive = false;
+            }
+        }
+    }
+    
+    /**
+     * @brief Trim photon trail to maintain maximum length
+     * @param trail Reference to the photon trail vector
+     */
+    void Engine::trimPhotonTrail(std::vector<glm::vec2>& trail)
+    {
+        if (trail.size() > trailLength) {
+            const size_t removeCount = trail.size() - trailLength;
+            trail.erase(trail.begin(), trail.begin() + removeCount);
         }
     }
     void Engine::drawKerrPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat)
@@ -370,32 +483,15 @@ namespace BlackholeSim
             ImGui::NewFrame();
             Controlpanel(*this);
 
-            // update physics
-            if (mode == Mode::Kerr)
-            {
+            // Update physics simulation
+            if (mode == Mode::Kerr) {
                 updateKerrPhotons(a_spin);
-            }
-            else
-            {
-                updateTestPhotons(0.01, 1.0);
+            } else {
+                updateTestPhotons(Constants::INTEGRATION_STEP, Constants::MASS_DEFAULT);
             }
 
-            // debug output occasionally
-            static int dbg = 0;
-            if ((dbg++ % 300) == 0)
-            {
-                if (!kerrPhotons.empty())
-                    std::cerr << "DBG[0] Kerr L=" << kerrPhotons.front().L
-                              << " r=" << kerrPhotons.front().s.r
-                              << " phi=" << kerrPhotons.front().s.phi
-                              << " trail=" << kerrPhotons.front().trail.size()
-                              << " alive=" << kerrPhotons.front().alive << std::endl;
-                if (!testPhotons.empty())
-                    std::cerr << "DBG[0] Test x=" << testPhotons.front().s.x
-                              << " y=" << testPhotons.front().s.y
-                              << " trail=" << testPhotons.front().trail.size()
-                              << " alive=" << testPhotons.front().alive << std::endl;
-            }
+            // Periodic debug output for monitoring simulation state
+            outputDebugInfo();
 
             // render
             int display_w, display_h;
@@ -415,6 +511,31 @@ namespace BlackholeSim
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glfwSwapBuffers(window);
+        }
+    }
+    
+    /**
+     * @brief Output periodic debug information about simulation state
+     */
+    void Engine::outputDebugInfo()
+    {
+        static int debugCounter = 0;
+        if ((debugCounter++ % Constants::DEBUG_OUTPUT_FREQUENCY) == 0) {
+            if (!kerrPhotons.empty()) {
+                const auto& photon = kerrPhotons.front();
+                std::cerr << "DEBUG[Kerr] L=" << photon.L
+                          << " r=" << photon.s.r
+                          << " phi=" << photon.s.phi
+                          << " trail_size=" << photon.trail.size()
+                          << " alive=" << (photon.alive ? "true" : "false") << std::endl;
+            }
+            if (!testPhotons.empty()) {
+                const auto& photon = testPhotons.front();
+                std::cerr << "DEBUG[Test] x=" << photon.s.x
+                          << " y=" << photon.s.y
+                          << " trail_size=" << photon.trail.size()
+                          << " alive=" << (photon.alive ? "true" : "false") << std::endl;
+            }
         }
     }
 

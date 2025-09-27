@@ -1,4 +1,4 @@
-#include <GL/glew.h>
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -130,15 +130,12 @@ struct Engine {
             exit(EXIT_FAILURE);
         }
         glfwMakeContextCurrent(window);
-        glewExperimental = GL_TRUE;
-        GLenum glewErr = glewInit();
-        if (glewErr != GLEW_OK) {
-            cerr << "Failed to initialize GLEW: "
-                << (const char*)glewGetErrorString(glewErr)
-                << "\n";
-            glfwTerminate();
+        
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+            cerr << "Failed to initialize GLAD\n";
             exit(EXIT_FAILURE);
         }
+
         cout << "OpenGL " << glGetString(GL_VERSION) << "\n";
         this->shaderProgram = CreateShaderProgram();
 
