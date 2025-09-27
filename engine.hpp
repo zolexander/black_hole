@@ -25,6 +25,7 @@
 #include <blackholesim.hpp>
 #include <filesystem>
 #include <optional>
+#include "blackhole_struct.hpp"
 
 namespace BlackholeSim
 {
@@ -65,6 +66,7 @@ namespace BlackholeSim
         
         // Debug output frequency
         constexpr int DEBUG_OUTPUT_FREQUENCY = 300;
+        
     }
     
     /**
@@ -80,7 +82,10 @@ namespace BlackholeSim
         // Window & GL
     public:
         GLFWwindow *window = nullptr;
+        BlackHole bh = BlackHole();
 
+        bool showHorizons = true;
+        bool showErgosphere = true;
         // Photons
         std::vector<Photon> kerrPhotons;
         std::vector<TestPhoton> testPhotons;

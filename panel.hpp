@@ -58,9 +58,15 @@ namespace BlackholeSim {
             {"End Controlpanel", [](Engine& eng, const std::string&) {
                 ImGui::Text("Photons: %d  TrailLen: %zu", eng.photonCount, eng.trailLength);
                 ImGui::Text("Spin: %.2f     Zocom: %.2f", eng.a_spin, eng.zoom);
+            }},
+            {"Show Horizons", [](Engine& eng, const std::string&) {
+                ImGui::Checkbox("Show Horizons", &eng.showHorizons);
+            }},
+            {"Show Ergosphere", [](Engine& eng, const std::string&) {
+                ImGui::Checkbox("Show Ergosphere", &eng.showErgosphere);
             }}
-        };
-    }
+    };
+}
 
     inline void Controlpanel(Engine& eng) {
         ImGui::Begin("Kontrolle");

@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include "panel.hpp"
-#include "blackholesim.hpp"
+#include "blackhole_struct.hpp"
 namespace BlackholeSim
 {
     Engine::Engine() {}
@@ -125,7 +125,7 @@ namespace BlackholeSim
         ImGui::StyleColorsDark();
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 330");
-        prog = Engine::loadShader("vs.frag", "fs.vert");
+        prog = Engine::loadShader("vs.vert", "fs.frag");
         colorLoc = glGetUniformLocation(prog, "color");
         zoomLoc = glGetUniformLocation(prog, "zoom");
         alphaLoc = glGetUniformLocation(prog, "alpha");
@@ -477,7 +477,6 @@ namespace BlackholeSim
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
-
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
@@ -499,21 +498,37 @@ namespace BlackholeSim
             glViewport(0, 0, display_w, display_h);
             glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-
             // draw photons
-            if (mode == Mode::Kerr)
+            if (mode == Mode::Kerr) {
                 drawKerrPhotons(prog, proj, view);
-            else
-                drawTestPhotons(prog, proj, view);
-
-            // ImGui render
+                if(showHorizons) {
+                    double rp = bh.r_plus();
+                    double rm = bh.r_minus();
+                    if (std::isfinite(rp)) {
+                       BlackholeSim::drawBlackHoleVisuals(bh, prog, vao, vbo, proj, view, (float)zoom);
+                    }
+                  
+                }
+            }
+            // Finalize Dear ImGui for this frame (builds the command lists)
             ImGui::Render();
+
+            // Reset GL state to what ImGui expects to avoid crashes in the backend
+            glUseProgram(0);
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glfwSwapBuffers(window);
         }
     }
-    
+
     /**
      * @brief Output periodic debug information about simulation state
      */

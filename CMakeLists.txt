@@ -1,10 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 project(BlackHoleSim)
-
+if(NOT CMAKE_BUILD_TYPE) 
+set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
 # --- Compiler-Einstellungen --- #
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0")
 
 # Avoid GLFW including any OpenGL headers; we use GLAD for that
 add_compile_definitions(GLFW_INCLUDE_NONE)
@@ -86,7 +90,8 @@ target_link_libraries(KerrBlackHole PRIVATE
     imgui
 )
 target_include_directories(KerrBlackHole PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_executable(mainKerr main.cpp kerrintegrate.cpp blackholesim.cpp engine.cpp)
+add_executable(mainKerr main.cpp kerrintegrate.cpp blackholesim.cpp engine.cpp blackhole_struct.cpp)
+
 target_link_libraries(mainKerr PRIVATE
     glad::glad
     ${OpenMP_LIBRARIES}
