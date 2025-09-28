@@ -501,14 +501,17 @@ namespace BlackholeSim
             // draw photons
             if (mode == Mode::Kerr) {
                 drawKerrPhotons(prog, proj, view);
-                if(showHorizons) {
-                    double rp = bh.r_plus();
-                    double rm = bh.r_minus();
-                    if (std::isfinite(rp)) {
-                       BlackholeSim::drawBlackHoleVisuals(bh, prog, vao, vbo, proj, view, (float)zoom);
-                    }
-                  
+                double rp = bh.r_plus();
+                double rm = bh.r_minus();
+                if (std::isfinite(rp)) {
+                    BlackholeSim::drawBlackHoleVisuals(bh, prog, vao, vbo, proj, view, (float)zoom, showHorizons, showErgosphere);
                 }
+                if (std::isfinite(rm)) {
+                    BlackholeSim::drawBlackHoleVisuals(bh, prog, vao, vbo, proj, view, (float)zoom, showHorizons, showErgosphere);
+                }
+            } else {
+                // Test mode rendering
+                drawTestPhotons(prog, proj, view);
             }
             // Finalize Dear ImGui for this frame (builds the command lists)
             ImGui::Render();

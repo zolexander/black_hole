@@ -32,7 +32,7 @@ namespace BlackholeSim
         bool alive;
         std::vector<glm::vec2> trail;
 
-        Photon(double L_);
+        Photon(double L_ = 0.0);
 
         void reset(double L_, const KerrState &startState);
     };
@@ -42,7 +42,7 @@ namespace BlackholeSim
         bool alive;
         std::vector<glm::vec2> trail;
 
-        TestPhoton(double x0, double y0);
+        TestPhoton(double x0 = -20.0, double y0 = 0.0);
         void reset(double x0, double y0);
     };
 }

@@ -32,7 +32,7 @@ namespace BlackholeSim
     // Constants for better code readability
     namespace Constants {
         // Rendering constants
-        constexpr float DEFAULT_ZOOM = 0.2f;
+        constexpr float DEFAULT_ZOOM = 0.9f;
         constexpr double DEFAULT_SPIN = 0.7;
         constexpr int DEFAULT_PHOTON_COUNT = 200;
         constexpr size_t DEFAULT_TRAIL_LENGTH = 200;

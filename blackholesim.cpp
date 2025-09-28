@@ -20,9 +20,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <blackholesim.hpp>
 
-BlackholeSim::Photon::Photon(double L_ = 0.0) : L(L_), h(0.01), alive(true)
+BlackholeSim::Photon::Photon(double L_) : L(L_), h(0.01), alive(true)
 {
-    s = {4.0, M_PI};
+    s = {8.0, M_PI};
     trail.reserve(256);
 }
 
@@ -36,7 +36,7 @@ void BlackholeSim::Photon::reset(double L_, const KerrState &startState)
     trail.reserve(256);
 }
 
-BlackholeSim::TestPhoton::TestPhoton(double x0 = -20.0, double y0 = 0.0)
+BlackholeSim::TestPhoton::TestPhoton(double x0, double y0)
 {
     s = {x0, y0, 1.0, 0.0};
     alive = true;

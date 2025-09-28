@@ -8,6 +8,7 @@
 #include <vector>
 #include <functional>
 
+#include "blackholesim.hpp"
 #include "imgui.h"
 #include "engine.hpp"
 
@@ -73,6 +74,10 @@ namespace BlackholeSim {
 
         static PanelList panels = createPanels();
         for (auto& [name, fn] : panels) {
+            if (eng.mode == Mode::Test &&
+                (name == "Show Horizons" || name == "Show Ergosphere")) {
+                continue;
+            }
             fn(eng, name);
         }
 
