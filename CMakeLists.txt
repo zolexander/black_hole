@@ -90,7 +90,7 @@ target_link_libraries(KerrBlackHole PRIVATE
     imgui
 )
 target_include_directories(KerrBlackHole PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_executable(mainKerr main.cpp kerrintegrate.cpp blackholesim.cpp engine.cpp blackhole_struct.cpp)
+add_executable(mainKerr main.cpp kerrintegrate.cpp blackholesim.cpp engine.cpp blackhole_struct.cpp utils.cpp)
 
 target_link_libraries(mainKerr PRIVATE
     glad::glad

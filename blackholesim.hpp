@@ -23,14 +23,20 @@ namespace BlackholeSim
         double x, y;
         double vx, vy;
     };
-
+    struct TrailPoint {
+        glm::vec2 pos;
+        glm::vec3 color;
+    
+        TrailPoint(float x, float y, glm::vec3 c) 
+            : pos(x, y), color(c) {}
+    };
     struct Photon
     {
         KerrState s;
         double L;
         double h;
         bool alive;
-        std::vector<glm::vec2> trail;
+        std::vector<TrailPoint> trail;
 
         Photon(double L_ = 0.0);
 

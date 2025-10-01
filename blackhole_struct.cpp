@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <iostream>
+#include "utils.hpp"
 
 // -------------------------------------------------------------------------------------
 // Geometry helper: sample a parametric radius r(theta) into a closed polyline
@@ -41,40 +42,49 @@ void BlackholeSim::drawPolylineFromVec(
   {
     if (points.empty()) return;
     BH_DBG("[DBG] drawPolylineFromVec: begin, points=" << points.size());
-  
+
     if (!glIsVertexArray(vao)) { BH_DBG("GL ERROR: Invalid VAO in drawPolylineFromVec"); return; }
     if (!glIsBuffer(vbo))      { BH_DBG("GL ERROR: Invalid VBO in drawPolylineFromVec"); return; }
-  
+
     // Backup previous bindings
     GLint prevVAO = 0;
     GLint prevArrayBuffer = 0;
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
-  
+
     // Upload vertex data
     glBindVertexArray(vao);            BH_DBG("[DBG] drawPolylineFromVec: bound VAO");
     glBindBuffer(GL_ARRAY_BUFFER, vbo);BH_DBG("[DBG] drawPolylineFromVec: bound VBO");
     glBufferData(GL_ARRAY_BUFFER, points.size() * sizeof(glm::vec2), points.data(), GL_DYNAMIC_DRAW);
-  
-    // Set color/alpha and issue the draw call
-    glUniform3fv(colorLoc, 1, &color[0]);
-    glUniform1f(alphaLoc, alpha);
+    
+    // Configure attribute 0 for tight-packed vec2 positions (override interleaved layout)
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
+
+    // Use a constant vertex attribute for color (attribute 1) so current shader's inColor works
+    glDisableVertexAttribArray(1);
+    glVertexAttrib3f(1, color.r * alpha, color.g * alpha, color.b * alpha);
+    
+    // Issue the draw call
     glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(points.size()));
-  
+
     // Restore previous caller state
+    // Restore attribute array 1 (re-enable for interleaved buffers used elsewhere)
+    glEnableVertexAttribArray(1);
+    // Restore attribute 0 layout back to interleaved [vec2 pos][vec3 color] = 5 floats
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glBindBuffer(GL_ARRAY_BUFFER, prevArrayBuffer);
     glBindVertexArray(prevVAO);
     BH_DBG("[DBG] drawPolylineFromVec: end");
   }
 // -------------------------------------------------------------------------------------
-// High-level: draw black hole horizons and ergosphere as colored polylines
 // Notes:
 //  - Does minimal GL state changes (keeps global state for ImGui stability).
 //  - Expects shader program to provide uniforms: proj, view, zoom, color, alpha.
 // -------------------------------------------------------------------------------------
 void BlackholeSim::drawBlackHoleVisuals(
     const BlackHole &bh,
-    GLuint shader,
+    BlackholeSim::Utils::Shader &shader,
     GLuint vao,
     GLuint vbo,
     const glm::mat4 &proj,
@@ -85,23 +95,15 @@ void BlackholeSim::drawBlackHoleVisuals(
   {
     BH_DBG("[DBG] drawBlackHoleVisuals: begin");
 
-    // Save/restore only the active program to avoid interfering with ImGui
-    GLint prevProgram = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
-    glUseProgram(shader);
+    // Bind program via wrapper and set common uniforms
+    shader.use();
+    shader.setMat4("proj", proj);
+    shader.setMat4("view", view);
+    shader.setFloat("zoom", zoom);
 
-    if (!glIsProgram(shader)) { BH_DBG("GL ERROR: Invalid shader program in drawBlackHoleVisuals"); return; }
-
-    // Uniforms
-    const GLint projLoc  = glGetUniformLocation(shader, "proj");
-    const GLint viewLoc  = glGetUniformLocation(shader, "view");
-    const GLint zoomLoc  = glGetUniformLocation(shader, "zoom");
-    const GLint colorLoc = glGetUniformLocation(shader, "color");
-    const GLint alphaLoc = glGetUniformLocation(shader, "alpha");
-
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, &proj[0][0]);
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &view[0][0]);
-    glUniform1f(zoomLoc, zoom);
+    // Fetch locations for color/alpha once
+    const GLint colorLoc = shader.getUniformLocation("color");
+    const GLint alphaLoc = shader.getUniformLocation("alpha");
 
     // Sample/draw shapes based on flags
     if (showHorizons) {
@@ -126,5 +128,4 @@ void BlackholeSim::drawBlackHoleVisuals(
     }
 
     BH_DBG("[DBG] drawBlackHoleVisuals: end");
-    glUseProgram(prevProgram);
   }

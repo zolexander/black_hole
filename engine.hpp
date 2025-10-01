@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <optional>
 #include "blackhole_struct.hpp"
+#include "utils.hpp"
 
 namespace BlackholeSim
 {
@@ -77,6 +78,13 @@ namespace BlackholeSim
         float green;
         float blue;
     };
+ 
+
+    struct Vertex {
+        glm::vec2 pos;
+        glm::vec3 color;
+    };
+
     class Engine
     {
         // Window & GL
@@ -115,31 +123,36 @@ namespace BlackholeSim
         std::uniform_real_distribution<double> dist{-5.0, 5.0};
         Engine();
         ~Engine();
-
+        Utils::Shader shader1;
         void run();
         bool initGL(const char *title, int w, int h);
         void resetPhotons(int count);
 
     private:
-        std::optional<std::filesystem::path> abspath_no_traversal(
-            const std::filesystem::path &basepath,
-            const std::filesystem::path &relpath);
-        std::string readFromFile(const char *filePath);
-        GLuint loadShader(const char *vertexPath, const char *fragmentPath);
         // Konstruktor/Destruktor
         // Physics update functions
         void updateKerrPhotons(double a_spin);
         void updateTestPhotons(double h, double M);
-        
+        glm::vec3 getDopplerColor(const KerrState& s0, const KerrState& s1);
+
         // Rendering functions
-        void drawKerrPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat);
+        void drawKerrPhotons(const std::vector<Photon>& photons,
+            GLuint shader, GLuint vao, GLuint vbo,
+            const glm::mat4& proj, const glm::mat4& view,
+            float zoom);
         void drawTestPhotons(GLuint shader, const glm::mat4 &projMat, const glm::mat4 &viewMat);
         
         // Photon initialization helpers
         void initializeKerrPhotons();
         void initializeTestPhotons();
         double calculatePhotonYPosition(int index, double yMin, double yMax) const;
-        void trimPhotonTrail(std::vector<glm::vec2>& trail);
+        template <typename T>
+        void trimPhotonTrail(std::vector<T>& trail) {
+            if (trail.size() > trailLength) {
+                const size_t removeCount = trail.size() - trailLength;
+                trail.erase(trail.begin(), trail.begin() + removeCount);
+            }
+        }
         
         // Generic rendering helper
         template<typename PhotonType>

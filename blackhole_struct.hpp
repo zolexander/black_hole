@@ -10,8 +10,8 @@
 #include <functional>
 #include <glad/glad.h>
 #include <glm/glm.hpp>
-#include <iostream>
 #include <vector>
+#include "utils.hpp"
 
 // Toggle debug prints in this header (0 = off, 1 = on)
 #ifndef BH_STRUCT_DEBUG
@@ -66,7 +66,7 @@ makeEllipsePoints(std::function<double(double)> r_of_theta, int segments);
 void drawPolylineFromVec(GLuint vao, GLuint vbo,
                          const std::vector<glm::vec2> &points, GLint colorLoc,
                          GLint alphaLoc, const glm::vec3 &color, float alpha);
-void drawBlackHoleVisuals(const BlackHole &bh, GLuint shader, GLuint vao,
+void drawBlackHoleVisuals(const BlackHole &bh, BlackholeSim::Utils::Shader &shader, GLuint vao,
                           GLuint vbo, const glm::mat4 &proj,
                           const glm::mat4 &view, float zoom, bool showHorizons,
                           bool showErgosphere);
