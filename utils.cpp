@@ -171,7 +171,22 @@ void Shader::setVec4(const std::string &name, const glm::vec4 &value) const {
 void Shader::setMat4(const std::string &name, const glm::mat4 &mat) const {
     glUniformMatrix4fv(getUniformLocation(name), 1, GL_FALSE, glm::value_ptr(mat));
 }
-
+void Shader::bindSSBO(GLuint bindingPoint, GLuint bufferID) const {
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, bindingPoint, bufferID);
+}
+void Shader::DispatchCompute(GLuint groupx, GLuint groupy, GLuint groupz) const {
+    glDispatchCompute(groupx, groupy, groupz);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+void Shader::GenBuffers(GLuint count, GLuint *buffers) const {
+    glGenBuffers(count, buffers);
+}
+void Shader::BindBuffer(GLenum target, GLuint bufferID) const {
+    glBindBuffer(target, bufferID);
+}
+void Shader::BufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage) const {
+    glBufferData(target, size, data, usage);
+}
 
 } // namespace Utils
 } // namespace BlackholeSim

@@ -113,9 +113,14 @@ file(GLOB SHADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"
 )
 foreach(shader ${SHADERS})
-    add_custom_command(TARGET BlackHole3D POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${shader}
-        $<TARGET_FILE_DIR:BlackHole3D>
-    )
+  add_custom_command(TARGET BlackHole3D POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${shader}
+      $<TARGET_FILE_DIR:BlackHole3D>
+  )
+  add_custom_command(TARGET mainKerr POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${shader}
+      $<TARGET_FILE_DIR:mainKerr>
+  )
 endforeach()

@@ -48,9 +48,10 @@ namespace BlackholeSim
         constexpr double VELOCITY_THRESHOLD = 1e-12;
         
         // Initial conditions
-        constexpr double INITIAL_X = -30.0;
-        constexpr double Y_MIN = -8.0;
-        constexpr double Y_MAX = 8.0;
+        constexpr double INITIAL_X = -20.0;
+        // Narrow band around photon critical impact parameter (~5.2 for M=1)
+        constexpr double Y_MIN = -6.0;
+        constexpr double Y_MAX = 6.0;
         
         // Rendering colors
         constexpr float KERR_RED = 0.8f;
@@ -121,6 +122,13 @@ namespace BlackholeSim
         // RNG for initial y distribution
         std::default_random_engine rng;
         std::uniform_real_distribution<double> dist{-5.0, 5.0};
+        // GPU photon path state (compute)
+        bool useGPUPaths = false;
+        BlackholeSim::Utils::Shader photonCompute; // compute_photons.comp
+        GLuint ssboPhotons = 0; // binding = 0
+        GLuint ssboTrails = 0;  // binding = 1
+        int gpuTrailLen = (int)Constants::DEFAULT_TRAIL_LENGTH;
+        unsigned int frameIndex = 0;
         Engine();
         ~Engine();
         Utils::Shader shader1;
@@ -134,6 +142,11 @@ namespace BlackholeSim
         void updateKerrPhotons(double a_spin);
         void updateTestPhotons(double h, double M);
         glm::vec3 getDopplerColor(const KerrState& s0, const KerrState& s1);
+        // GPU compute update
+        void initPhotonSSBOs();
+        void uploadPhotonSSBOs();
+        void dispatchPhotonCompute(float dt, float aSpin, float speedScale, float dopplerStrength);
+        void readTrailsBackToCPU();
 
         // Rendering functions
         void drawKerrPhotons(const std::vector<Photon>& photons,

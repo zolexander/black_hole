@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <cstring>
 namespace BlackholeSim {
 Engine::Engine() {}
 // ============================================================================
@@ -27,8 +28,9 @@ bool Engine::initGL(const char *title, int w, int h) {
     return false;
   }
 
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+  // Compute shaders + SSBOs require OpenGL 4.3+
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
   window = glfwCreateWindow(w, h, title, nullptr, nullptr);
@@ -55,9 +57,7 @@ bool Engine::initGL(const char *title, int w, int h) {
   shader1 = BlackholeSim::Utils::Shader("photon.vert", "photon.frag");
   shader1.use();
   prog = shader1.ID;
-  colorLoc = shader1.getUniformLocation("color");
   zoomLoc = shader1.getUniformLocation("zoom");
-  alphaLoc = shader1.getUniformLocation("alpha");
   projLoc = shader1.getUniformLocation("proj");
   viewLoc = shader1.getUniformLocation("view");
 
@@ -77,15 +77,34 @@ bool Engine::initGL(const char *title, int w, int h) {
 
   // blending
   glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+  // Use standard alpha blending for clearer lines
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
 
   // projection / view
   proj = glm::ortho(-40.0f, 40.0f, -30.0f, 30.0f, -1.0f, 1.0f);
   view = glm::mat4(1.0f);
 
+  // Check GL version supports compute (>= 4.3)
+  GLint glMajor = 0, glMinor = 0;
+  glGetIntegerv(GL_MAJOR_VERSION, &glMajor);
+  glGetIntegerv(GL_MINOR_VERSION, &glMinor);
+  bool supportsCompute = (glMajor > 4) || (glMajor == 4 && glMinor >= 3);
+
   // Initialize photon simulation
   resetPhotons(photonCount);
+
+  // Initialize compute shader only if requested and supported
+  if (useGPUPaths && supportsCompute) {
+    photonCompute = BlackholeSim::Utils::Shader("compute_photons.comp");
+    initPhotonSSBOs();
+    uploadPhotonSSBOs();
+  } else if (!supportsCompute && useGPUPaths) {
+    // Requested GPU but not supported; fall back
+    useGPUPaths = false;
+    std::cerr << "GPU compute disabled: OpenGL " << glMajor << "." << glMinor
+              << " < 4.3. Falling back to CPU path.\n";
+  }
 
   return true;
 }
@@ -105,6 +124,9 @@ void Engine::resetPhotons(int count) {
     initializeKerrPhotons();
   } else {
     initializeTestPhotons();
+  }
+  if (useGPUPaths) {
+    uploadPhotonSSBOs();
   }
 }
 
@@ -210,6 +232,10 @@ double Engine::calculatePhotonYPosition(int index, double yMin,
  * @param a_spin Black hole spin parameter
  */
 void Engine::updateKerrPhotons(double a_spin) {
+  if (useGPUPaths) {
+    // When GPU is active, skip CPU integration. Dispatch handled in run().
+    return;
+  }
   for (auto &photon : kerrPhotons) {
     if (!photon.alive) {
       continue;
@@ -323,7 +349,12 @@ void Engine::drawKerrPhotons(const std::vector<Photon> &photons, GLuint shader,
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
 
-    glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(p.trail.size()));
+    if (p.trail.size() >= 2) {
+      glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(p.trail.size()));
+    } else {
+      glPointSize(5.0f);
+      glDrawArrays(GL_POINTS, 0, 1);
+    }
 
     glDisableVertexAttribArray(0);
     glDisableVertexAttribArray(1);
@@ -392,6 +423,7 @@ void Engine::run() {
   if (!window)
     return;
 
+  double lastTime = glfwGetTime();
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
     ImGui_ImplOpenGL3_NewFrame();
@@ -400,8 +432,18 @@ void Engine::run() {
     Controlpanel(*this);
 
     // Update physics simulation
+    double now = glfwGetTime();
+    float dt = static_cast<float>(now - lastTime);
+    lastTime = now;
     if (mode == Mode::Kerr) {
-      updateKerrPhotons(a_spin);
+      if (useGPUPaths) {
+        // speed_scale and doppler_strength are artistic controls
+        // Moderate advance per frame for stable visuals
+        dispatchPhotonCompute(dt > 0 ? dt : 0.016f, static_cast<float>(a_spin), 10.0f, 0.5f);
+        readTrailsBackToCPU();
+      } else {
+        updateKerrPhotons(a_spin);
+      }
     } else {
       updateTestPhotons(Constants::INTEGRATION_STEP, Constants::MASS_DEFAULT);
     }
@@ -475,6 +517,172 @@ void Engine::outputDebugInfo() {
   }
 }
 
+// ----------------------------------------------------------------------------
+// GPU compute helpers (definitions)
+// ----------------------------------------------------------------------------
+void Engine::initPhotonSSBOs() {
+  if (ssboPhotons == 0) photonCompute.GenBuffers(1, &ssboPhotons);
+  if (ssboTrails == 0) photonCompute.GenBuffers(1, &ssboTrails);
+
+  // Allocate initial buffers
+  GLsizeiptr photonsSize = static_cast<GLsizeiptr>(photonCount) * 48; // std430 struct size
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, ssboPhotons);
+  photonCompute.BufferData(GL_SHADER_STORAGE_BUFFER, photonsSize, nullptr, GL_DYNAMIC_DRAW);
+  photonCompute.bindSSBO(0, ssboPhotons);
+
+  GLsizeiptr trailsSize = static_cast<GLsizeiptr>(photonCount) * gpuTrailLen * sizeof(glm::vec2);
+  
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, ssboTrails);
+  photonCompute.BufferData(GL_SHADER_STORAGE_BUFFER, trailsSize, nullptr, GL_DYNAMIC_DRAW);
+  photonCompute.bindSSBO(1, ssboTrails);
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
+void Engine::uploadPhotonSSBOs() {
+  if (ssboPhotons == 0 || ssboTrails == 0) {
+    initPhotonSSBOs();
+  }
+  struct PhotonGPU {
+    float s_x, s_y; // r, phi
+    float L;
+    float h;
+    float alive;
+    float pad_[3];
+    float col[4];
+  };
+
+  std::vector<PhotonGPU> data;
+  data.resize(photonCount);
+  for (int i = 0; i < photonCount; ++i) {
+    PhotonGPU p{};
+    if (i < static_cast<int>(kerrPhotons.size())) {
+      const auto &src = kerrPhotons[i];
+      p.s_x = static_cast<float>(src.s.r);
+      p.s_y = static_cast<float>(src.s.phi);
+      p.L = static_cast<float>(src.L);
+      p.h = static_cast<float>(src.h > 0 ? src.h : 0.02);
+      p.alive = src.alive ? 1.0f : 0.0f;
+      p.col[0] = 1.0f; p.col[1] = 1.0f; p.col[2] = 1.0f; p.col[3] = 1.0f;
+    } else {
+      p.alive = 0.0f;
+    }
+    data[i] = p;
+  }
+
+  // Upload photons
+  GLsizeiptr photonsSize = static_cast<GLsizeiptr>(data.size() * sizeof(PhotonGPU));
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, ssboPhotons);
+  photonCompute.BufferData(GL_SHADER_STORAGE_BUFFER, photonsSize, data.data(), GL_DYNAMIC_DRAW);
+  photonCompute.bindSSBO(0, ssboPhotons);
+
+  // Ensure trails buffer sized
+  GLsizeiptr trailsSize = static_cast<GLsizeiptr>(photonCount) * gpuTrailLen * sizeof(glm::vec2);
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, ssboTrails);
+  // Pre-fill trails with current states so we don't draw zeros
+  std::vector<glm::vec2> initTrails;
+  initTrails.resize(static_cast<size_t>(photonCount) * static_cast<size_t>(gpuTrailLen));
+  for (int i = 0; i < photonCount; ++i) {
+    float r = (i < (int)kerrPhotons.size()) ? static_cast<float>(kerrPhotons[i].s.r) : 0.0f;
+    float phi = (i < (int)kerrPhotons.size()) ? static_cast<float>(kerrPhotons[i].s.phi) : 0.0f;
+    glm::vec2 s(r, phi);
+    for (int t = 0; t < gpuTrailLen; ++t) {
+      initTrails[i * gpuTrailLen + t] = s;
+    }
+  }
+  photonCompute.BufferData(GL_SHADER_STORAGE_BUFFER, trailsSize, initTrails.data(), GL_DYNAMIC_DRAW);
+  photonCompute.bindSSBO(1, ssboTrails);
+  photonCompute.BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
+void Engine::dispatchPhotonCompute(float dt, float aSpin, float speedScale, float dopplerStrength) {
+  photonCompute.use();
+  photonCompute.bindSSBO(0,ssboPhotons);
+  photonCompute.bindSSBO(1, ssboTrails);
+  // Uniforms matching compute_photons.comp
+  photonCompute.setFloat("a_spin", aSpin);
+  photonCompute.setFloat("speed_scale", speedScale);
+  photonCompute.setFloat("doppler_strength", dopplerStrength);
+  photonCompute.setInt("photon_count", photonCount);
+  photonCompute.setInt("trailLen", gpuTrailLen);
+  photonCompute.setInt("frameIndex", frameIndex);
+
+  GLuint groups = static_cast<GLuint>((photonCount + 255) / 256);
+  photonCompute.DispatchCompute(groups,1,1);
+  frameIndex++;
+}
+
+void Engine::readTrailsBackToCPU() {
+  if (kerrPhotons.size() < static_cast<size_t>(photonCount)) return;
+
+  struct PhotonGPU {
+    float s_x, s_y; // r, phi
+    float L;
+    float h;
+    float alive;
+    float pad_[3];
+    float col[4];
+  };
+
+  // Read photons
+  
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssboPhotons);
+  PhotonGPU *pData = (PhotonGPU*)glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0,
+                         photonCount * sizeof(PhotonGPU), GL_MAP_READ_BIT);
+  std::vector<PhotonGPU> photonsCPU;
+  photonsCPU.resize(photonCount);
+  if (pData) {
+    std::memcpy(photonsCPU.data(), pData, photonCount * sizeof(PhotonGPU));
+    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+  }
+
+  // Read trails
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssboTrails);
+  const size_t trailsCount = static_cast<size_t>(photonCount) * static_cast<size_t>(gpuTrailLen);
+  glm::vec2 *tData = (glm::vec2*)glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0,
+                       trailsCount * sizeof(glm::vec2), GL_MAP_READ_BIT);
+  if (!tData) {
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    return;
+  }
+
+  for (int i = 0; i < photonCount; ++i) {
+    auto &cpuPhoton = kerrPhotons[i];
+    const PhotonGPU &pg = photonsCPU[i];
+    glm::vec3 col(pg.col[0], pg.col[1], pg.col[2]);
+    // Append a few of the most recent ring entries to grow trail faster
+    if (frameIndex > 0u) {
+      unsigned maxAppend = 5u;
+      unsigned available = std::min<unsigned>(static_cast<unsigned>(gpuTrailLen), frameIndex);
+      unsigned count = std::min<unsigned>(maxAppend, available);
+      for (unsigned j = 0; j < count; ++j) {
+        unsigned idx = (frameIndex - 1u - j) % static_cast<unsigned>(gpuTrailLen);
+        const glm::vec2 s = tData[i * gpuTrailLen + static_cast<int>(idx)]; // r, phi
+        float r = s.x;
+        float phi = s.y;
+        if ((r > 0.0f) && std::isfinite(r) && std::isfinite(phi)) {
+          float x = r * std::cos(phi);
+          float y = r * std::sin(phi);
+          cpuPhoton.trail.emplace_back(x, y, col);
+        }
+      }
+    }
+    // Trim to configured trail length
+    if (cpuPhoton.trail.size() > trailLength) {
+      const size_t removeCount = cpuPhoton.trail.size() - trailLength;
+      cpuPhoton.trail.erase(cpuPhoton.trail.begin(), cpuPhoton.trail.begin() + removeCount);
+    }
+    // Update state for debug
+    cpuPhoton.s.r = pg.s_x;
+    cpuPhoton.s.phi = pg.s_y;
+    cpuPhoton.h = pg.h;
+    cpuPhoton.L = pg.L;
+    cpuPhoton.alive = (pg.alive > 0.5f);
+  }
+
+  glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
 Engine::~Engine() {
   if (vbo)
     glDeleteBuffers(1, &vbo);
@@ -485,9 +693,5 @@ Engine::~Engine() {
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
-  if (window) {
-    glfwDestroyWindow(window);
-    glfwTerminate();
-  }
 }
-} // namespace BlackholeSim
+}

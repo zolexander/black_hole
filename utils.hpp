@@ -31,7 +31,11 @@ namespace BlackholeSim {
                 void setVec3 (const std::string &name, const glm::vec3 &value) const;
                 void setVec4 (const std::string &name, const glm::vec4 &value) const;
                 void setMat4 (const std::string &name, const glm::mat4 &mat)   const;
-            
+                void bindSSBO(GLuint bindingPoint, GLuint bufferID) const;
+                void DispatchCompute(GLuint groupx, GLuint groupy, GLuint groupz) const;
+                void GenBuffers(GLuint count, GLuint *buffers) const;
+                void BindBuffer(GLenum target, GLuint bufferID) const;
+                void BufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage) const;
             private:
                 std::string loadShaderSource(const char* path);
                 GLuint compileShader(const char* source, GLenum type);

@@ -101,9 +101,9 @@ void BlackholeSim::drawBlackHoleVisuals(
     shader.setMat4("view", view);
     shader.setFloat("zoom", zoom);
 
-    // Fetch locations for color/alpha once
-    const GLint colorLoc = shader.getUniformLocation("color");
-    const GLint alphaLoc = shader.getUniformLocation("alpha");
+    // This shader does not use 'color'/'alpha' uniforms; avoid querying to prevent warnings
+    const GLint colorLoc = -1;
+    const GLint alphaLoc = -1;
 
     // Sample/draw shapes based on flags
     if (showHorizons) {

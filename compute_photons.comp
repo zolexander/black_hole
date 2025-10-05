@@ -1,0 +1,180 @@
+#version 450
+
+// ========================================================
+// Compute Shader: Photon Integration with RKF45 (adaptive) + Trails + FreqShift
+// API-compatible Uniform Names (dt, a_spin, speed_scale, doppler_strength, photon_count)
+// ========================================================
+
+layout(local_size_x = 256) in;
+
+struct Photon {
+    vec2 s;     // state [r, phi]
+    float L;    // angular momentum
+    float h;    // step size storage (suggested initial > 0)
+    float alive; // 1.0 alive, 0.0 dead
+    vec4 col;   // color info (e.g. RGB + misc)
+};
+
+// Buffers
+layout(std430, binding = 0) buffer PhotonBuffer {
+    Photon photons[];
+};
+
+layout(std430, binding = 1) buffer TrailBuffer {
+    vec2 trails[]; // flattened [id * trailLen + slot]
+};
+
+// -----------------------------------------
+// Uniforms expected by wrapper API
+// -----------------------------------------
+uniform float dt;              // timestep (>0)
+uniform float a_spin;          // spin parameter
+uniform float speed_scale;     // scaling factor for integration speed
+uniform float doppler_strength;// affects color shift
+uniform int photon_count;      // number of photons
+
+// Additional trail uniforms
+uniform int trailLen;          // active trail length
+uniform uint frameIndex;       // frame counter
+
+// RKF45 constants (fixed here; can later expose as uniforms)
+const float rkf_tol = 1e-4;
+const float rkf_min_step = 1e-6;
+const float rkf_max_step = 0.05;
+
+// -----------------------------------------
+// Physics functions
+// -----------------------------------------
+float f_r(vec2 s, float L, float a) {
+    float r = max(s.x, 1e-6);
+    float num = (1.0 - 2.0/r);
+    float denom = 1.0 - 2.0/r + (L*L)/(r*r);
+    return num/denom;
+}
+
+float f_phi(vec2 s, float L, float a) {
+    float r = max(s.x, 1e-6);
+    float denom = 1.0 - 2.0/r + (L*L)/(r*r);
+    float omega = (L/(r*r)) / max(denom, 1e-3);
+    // Boost angular speed for visibility
+    return 5.0 * omega;
+}
+
+vec2 deriv(vec2 s, float L, float a) {
+    // Dummy use to ensure a_spin is not optimized away
+    float dummy = a * 0.0;
+    return vec2(f_r(s,L,a) + dummy, f_phi(s,L,a));
+}
+
+// -----------------------------------------
+// RKF45 (Cash-Karp)
+// -----------------------------------------
+const float b21 = 1.0/5.0;
+const float b31 = 3.0/40.0;
+const float b32 = 9.0/40.0;
+const float b41 = 3.0/10.0;
+const float b42 = -9.0/10.0;
+const float b43 = 6.0/5.0;
+const float b51 = -11.0/54.0;
+const float b52 = 5.0/2.0;
+const float b53 = -70.0/27.0;
+const float b54 = 35.0/27.0;
+const float b61 = 1631.0/55296.0;
+const float b62 = 175.0/512.0;
+const float b63 = 575.0/13824.0;
+const float b64 = 44275.0/110592.0;
+const float b65 = 253.0/4096.0;
+
+const float c1 = 37.0/378.0;
+const float c3 = 250.0/621.0;
+const float c4 = 125.0/594.0;
+const float c6 = 512.0/1771.0;
+
+const float dc1 = c1 - 2825.0/27648.0;
+const float dc2 = -18575.0/48384.0;
+const float dc3 = c3 - 13525.0/55296.0;
+const float dc4 = c4 - 277.0/14336.0;
+const float dc5 = -1.0/4.0;
+const float dc6 = c6 - 1.0/4.0;
+
+vec2 rkf45_adaptive_step(vec2 s, float L, inout float h, float a) {
+    h = clamp(h, rkf_min_step, rkf_max_step);
+
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        vec2 k1 = deriv(s, L, a);
+        vec2 k2 = deriv(s + h*(b21*k1), L, a);
+        vec2 k3 = deriv(s + h*(b31*k1 + b32*k2), L, a);
+        vec2 k4 = deriv(s + h*(b41*k1 + b42*k2 + b43*k3), L, a);
+        vec2 k5 = deriv(s + h*(b51*k1 + b52*k2 + b53*k3 + b54*k4), L, a);
+        vec2 k6 = deriv(s + h*(b61*k1 + b62*k2 + b63*k3 + b64*k4 + b65*k5), L, a);
+
+        vec2 y5 = s + h*(c1*k1 + c3*k3 + c4*k4 + c6*k6);
+        vec2 err = h*(dc1*k1 + dc2*k2 + dc3*k3 + dc4*k4 + dc5*k5 + dc6*k6);
+
+        float tol_r   = rkf_tol * max(abs(y5.x), abs(s.x)) + 1e-8;
+        float tol_phi = rkf_tol * max(abs(y5.y), abs(s.y)) + 1e-8;
+
+        float err_norm = max(abs(err.x)/tol_r, abs(err.y)/tol_phi);
+
+        if (err_norm <= 1.0) {
+            float scale = 0.9 * pow(max(err_norm, 1e-12), -0.2);
+            h = clamp(h*scale, rkf_min_step, rkf_max_step);
+            return y5;
+        } else {
+            float scale = 0.9 * pow(err_norm, -0.25);
+            h = max(h*scale, rkf_min_step);
+        }
+    }
+
+    float h_backup = h;
+    h = rkf_min_step;
+    vec2 y = s + h*deriv(s, L, a);
+    h = h_backup;
+    return y;
+}
+
+// -----------------------------------------
+// Utility: write to trail buffer
+// -----------------------------------------
+void write_trail(uint id, int trailLen, uint frameIndex, vec2 state) {
+    uint slot = uint(id) * uint(trailLen) + (frameIndex % uint(trailLen));
+    trails[slot] = state;
+}
+
+// -----------------------------------------
+// MAIN
+// -----------------------------------------
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uint(photon_count)) return;
+
+    Photon p = photons[id];
+    if (p.alive == 0.0) return;
+
+    float dt_safe = max(dt, 1e-9);
+    if (p.h <= 0.0) p.h = 0.01;
+
+    float step = p.h * dt_safe * speed_scale;
+    step = clamp(step, rkf_min_step, rkf_max_step);
+
+    vec2 new_s = rkf45_adaptive_step(p.s, p.L, step, a_spin);
+
+    if (any(bvec2(isnan(new_s.x), isnan(new_s.y))) || any(bvec2(isinf(new_s.x), isinf(new_s.y)))) {
+        p.alive = 0.0;
+    } else if (new_s.x < 2.0) {
+        p.alive = 0.0;
+    } else {
+        p.s = new_s;
+        p.h = step;
+        p.s.y = mod(p.s.y, 6.28318530718);
+
+        write_trail(id, trailLen, frameIndex, p.s);
+
+        // Simple freq shift / doppler effect on color (brightened for visibility)
+        float shift = doppler_strength * (1.0 / max(p.s.x,1.0));
+        float intensity = clamp(4.0 / p.s.x, 0.0, 1.0);
+        p.col.rgb = clamp(vec3(intensity, 0.4 + shift, 1.0 - 0.5*intensity), 0.0, 1.0);
+    }
+
+    photons[id] = p;
+}
